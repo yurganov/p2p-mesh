@@ -105,7 +105,12 @@ function status(c) {
   if (!c) return { cls: 'soon', text: 'Скоро' };
   if (!c.enabled) return { cls: 'off', text: 'Выключен' };
   if (!c.ready()) return c.state === 'connecting' ? { cls: 'wait', text: 'Подключение…' } : { cls: 'down', text: 'Нет связи' };
-  return now() - c.lastPeer < 20000 ? { cls: 'peer', text: 'Друг на связи' } : { cls: 'up', text: 'Подключён, друга не слышно' };
+  if (c.dead) return { cls: 'dead', text: c.deadWhy === 'loss' ? 'Исключён: доли теряются, повтор через 30 с' : 'Исключён: друг нас не слышит' };
+  const t = now();
+  const hears = t - (c.lastEcho || -1e9) < 15000;
+  const heard = t - c.lastPeer < 20000;
+  if (hears) return { cls: 'peer', text: heard ? 'Друг нас слышит' : 'Друг нас слышит, мы его нет' };
+  return heard ? { cls: 'up', text: 'Мы слышим друга, он нас пока нет' } : { cls: 'up', text: 'Подключён, друга не слышно' };
 }
 
 function chat(room, key, fresh) {
@@ -118,9 +123,8 @@ function chat(room, key, fresh) {
     keys,
     onChange: () => render(),
     onMessage: (box, late) => incoming(box, late),
-    onCtl: (c, on) => {
-      const t = `${mesh.peerNick || 'Друг'} ${on ? 'включил' : 'выключил'} ${c.short || c.name} · ${hhmm()}`;
-      toast(t);
+    onHealth: (c, ok) => {
+      const t = ok ? `${c.short || c.name} снова работает · ${hhmm()}` : `${c.short || c.name} не отвечает, исключён из рассылки · ${hhmm()}`;
       sys(t);
     },
   });
@@ -253,7 +257,7 @@ function chat(room, key, fresh) {
     $('#strip').innerHTML = mesh.channels
       .map((c) => {
         const s = status(c);
-        const val = !c.enabled ? 'выкл' : !c.ready() ? '—' : c.last != null ? ms(c.last) : '···';
+        const val = !c.enabled ? 'выкл' : !c.ready() ? '—' : c.dead ? 'искл.' : c.last != null ? ms(c.last) : '···';
         return `<button class="chip ${s.cls}" data-ch="${c.id}"><span class="dot ${s.cls}"></span><span class="cn">${esc(c.short || c.name)}</span><span class="cv">${val}</span></button>`;
       })
       .join('');
@@ -322,8 +326,8 @@ function chat(room, key, fresh) {
       i.onchange = () => {
         mesh.setEnabled(i.dataset.tog, i.checked);
         const c = mesh.byId[i.dataset.tog];
-        toast(`${c.short || c.name} ${i.checked ? 'включён' : 'выключен'} у обоих`);
-        sys(`Вы ${i.checked ? 'включили' : 'выключили'} ${c.short || c.name} у обоих · ${hhmm()}`);
+        toast(`${c.short || c.name} ${i.checked ? 'включён' : 'выключен'}`);
+        sys(`Вы ${i.checked ? 'включили' : 'выключили'} ${c.short || c.name} · ${hhmm()}`);
       };
     });
   }
@@ -335,7 +339,7 @@ function chat(room, key, fresh) {
   function sheetCatalog() {
     $('#sheet-title').textContent = 'Каналы';
     $('#sheet-body').innerHTML =
-      `<p class="note">Нажмите на канал, чтобы узнать, как он работает. Переключатель выключает канал сразу у вас и у друга.</p>` +
+      `<p class="note">Нажмите на канал, чтобы узнать, как он работает. Нерабочие каналы исключаются сами и возвращаются, когда оживут. Переключатель выключает канал только у вас.</p>` +
       GROUPS.map((g) => {
         const items = CATALOG.filter((d) => d.group === g.id);
         return `<h3>${esc(g.title)} · ${esc(g.note)}</h3><div class="group">${items
@@ -372,7 +376,7 @@ function chat(room, key, fresh) {
     $('#sheet-body').innerHTML = `
       <div class="hero"><span class="dot big ${c ? status(c).cls : d.soon ? 'soon' : 'off'}" id="ch-dot"></span><div><div class="htitle">${esc(d.name)}</div><small>${esc(GROUP[d.group].title)}${d.host ? ' · ' + esc(d.host) : ''}</small></div></div>
       ${c ? `<div class="stats" id="ch-stats"></div>` : ''}
-      ${c ? `<div class="group"><div class="cell row"><div class="rt"><div>Использовать канал</div><small>Переключается сразу у обоих</small></div>${toggle(id, c.enabled)}</div></div>` : ''}
+      ${c ? `<div class="group"><div class="cell row"><div class="rt"><div>Использовать канал</div><small>Только у вас: по каналу перестанем отправлять, приём останется</small></div>${toggle(id, c.enabled)}</div></div>` : ''}
       <h3>Простыми словами</h3>
       <div class="group"><div class="cell text">${esc(GROUP[d.group].plain)}</div></div>
       <h3>Как устроено</h3>

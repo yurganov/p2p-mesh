@@ -6,10 +6,12 @@ import { sha256, bytesToHex, utf8ToBytes, randHex, b64, unb64, encrypt, decrypt,
 export const K = 3;
 const ACK_TIMEOUT = 10000;
 const PEER_TIMEOUT = 20000;
+const HEAR_TIMEOUT = 15000; // сколько ждём эха, прежде чем исключить канал
+const RETRY_DEAD = 30000; // через сколько снова пробуем канал, исключённый за потери
 
 export class Mesh {
-  constructor({ room, key, nick, keys, disabled, onChange, onMessage, onCtl }) {
-    Object.assign(this, { room, key, nick, onChange, onMessage, onCtl });
+  constructor({ room, key, nick, keys, disabled, onChange, onMessage, onHealth }) {
+    Object.assign(this, { room, key, nick, onChange, onMessage, onHealth });
     this.topic = bytesToHex(sha256(utf8ToBytes(`p2pmesh|${room}|${bytesToHex(key)}`))).slice(0, 24);
     this.me = randHex(4);
     this.peer = null;
@@ -72,14 +74,49 @@ export class Mesh {
           s.done = true;
           s.lost = true;
           this.byId[id].lost++;
+          this.byId[id].lossStreak = (this.byId[id].lossStreak || 0) + 1;
         }
       }
     }
+    this.health(t);
     if (this.rtc && this.peer && this.me < this.peer && !this.rtc.ready() && this.peerOnline() && t - this.lastRtcTry > 15000) {
       this.lastRtcTry = t;
       this.rtc.connect(this.peer);
     }
     this.changed();
+  }
+
+  // Нерабочие каналы исключаются из рассылки сами: друг нас не слышит или доли теряются.
+  health(t) {
+    const online = this.peerOnline();
+    for (const c of this.channels) {
+      if (!c.ready()) {
+        c.upAt = 0;
+        continue;
+      }
+      if (!c.upAt) c.upAt = t;
+      if (!c.enabled) continue;
+      if (c.dead) {
+        if (c.deadWhy === 'loss' && t - c.deadAt > RETRY_DEAD) this.revive(c);
+        continue;
+      }
+      const silent = online && t - c.upAt > HEAR_TIMEOUT && t - (c.lastEcho || 0) > HEAR_TIMEOUT;
+      if (silent || c.lossStreak >= 3) {
+        c.dead = true;
+        c.deadAt = t;
+        c.deadWhy = silent ? 'silent' : 'loss';
+        this.onHealth?.(c, false);
+      }
+    }
+  }
+  revive(c) {
+    c.dead = false;
+    c.lossStreak = 0;
+    this.onHealth?.(c, true);
+  }
+  heard(c, t) {
+    c.lastEcho = t;
+    if (c.dead && c.deadWhy === 'silent') this.revive(c);
   }
 
   // скользящий счётчик байт за 5 с
@@ -116,8 +153,6 @@ export class Mesh {
     if (this.peer !== o.f) {
       this.peer = o.f;
       this.lastRtcTry = 0;
-      // новый собеседник получает мои выключенные каналы, чтобы состояние совпало
-      setTimeout(() => this.channels.filter((c) => !c.enabled).forEach((c) => this.broadcast({ t: 'ctl', ch: c.id, on: false, to: this.peer, sid: randHex(4) })), 500);
     }
     ch.lastPeer = t;
     if (o.nk) this.peerNick = o.nk;
@@ -128,12 +163,15 @@ export class Mesh {
         break;
       case 'ho':
         this.addRtt(ch, t - o.ts);
+        this.heard(ch, t);
         break;
       case 's':
         ch.send(this.frame({ t: 'a', id: o.id, x: o.x, to: o.f }));
         this.gotShare(ch, o, t);
         break;
       case 'a':
+        this.heard(ch, t);
+        ch.lossStreak = 0;
         this.gotAck(ch, o, t);
         break;
       case 'ok': {
@@ -149,21 +187,13 @@ export class Mesh {
         this.sigSeen.add(o.sid);
         this.rtc?.signal(o.f, o.m);
         break;
-      case 'ctl':
-        if (this.sigSeen.has(o.sid)) return;
-        this.sigSeen.add(o.sid);
-        if (this.byId[o.ch] && this.byId[o.ch].enabled !== o.on) {
-          this.byId[o.ch].enabled = o.on;
-          this.onCtl?.(this.byId[o.ch], o.on);
-        }
-        break;
     }
     this.changed();
   }
 
   active() {
     const t = now();
-    return this.channels.filter((c) => c.enabled && c.ready() && t - c.lastShare >= c.minGap);
+    return this.channels.filter((c) => c.enabled && !c.dead && c.ready() && t - c.lastShare >= c.minGap);
   }
 
   send(text, auto = false) {
@@ -262,13 +292,12 @@ export class Mesh {
     return null;
   }
 
-  // Переключение синхронное: команда уходит другу по всем каналам, включая сам переключаемый.
+  // Выключение только у себя: по каналу перестаём отправлять, приём остаётся.
   setEnabled(id, on) {
     const c = this.byId[id];
     if (!c) return;
-    const ctl = () => this.peer && this.broadcast({ t: 'ctl', ch: id, on, to: this.peer, sid: randHex(4) });
-    if (on) (c.enabled = true), ctl();
-    else ctl(), (c.enabled = false);
+    c.enabled = on;
+    if (on) this.revive(c);
     this.changed();
   }
 }

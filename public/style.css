@@ -96,6 +96,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .dot.up { background: var(--blue); }
 .dot.wait { background: var(--orange); animation: pulse 1.4s infinite; }
 .dot.down { background: var(--red); }
+.dot.dead { background: transparent; border: 2px solid var(--orange); }
+.chip.dead { opacity: 0.6; }
+.chip.dead .cv { color: var(--orange); }
 .dot.off { background: transparent; border: 1.5px solid var(--label3); }
 .dot.soon { background: var(--fill2); }
 .dot.big { width: 14px; height: 14px; }
