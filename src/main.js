@@ -2,10 +2,10 @@ import qrcode from 'qrcode-generator';
 import { Mesh, K } from './mesh.js';
 import { CATALOG, GROUPS } from './channels.js';
 import { randomText } from './textgen.js';
-import { rand, randHex, b64url, unb64url, median, pct, ms, now } from './util.js';
+import { rand, randHex, b64url, unb64url, median, pct, ms, now, kbps, kb } from './util.js';
 
 const $ = (s, r = document) => r.querySelector(s);
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const store = {
   get: (k, d) => {
     try {
@@ -20,13 +20,22 @@ const store = {
     } catch {}
   },
 };
-const clock = (d = new Date()) => d.toTimeString().slice(0, 8);
-const SPARK = '▁▂▃▄▅▆▇█';
-const spark = (vals) => {
-  if (!vals.length) return '';
-  const mx = Math.max(...vals), mn = Math.min(...vals);
-  return vals.map((v) => SPARK[Math.round(((v - mn) / (mx - mn || 1)) * 7)]).join('');
+const hhmm = (d = new Date()) => d.toTimeString().slice(0, 5);
+const ICON = {
+  invite: '<svg viewBox="0 0 24 24"><path d="M15 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1"/><circle cx="8.5" cy="7.5" r="3.5"/><path d="M19 8v6M22 11h-6"/></svg>',
+  list: '<svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>',
+  chart: '<svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
+  up: '<svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+  play: '<svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
 };
+const spark = (vals, w = 64, h = 18) => {
+  if (vals.length < 2) return '';
+  const mx = Math.max(...vals), mn = Math.min(...vals);
+  const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * w).toFixed(1)},${(h - 1 - ((v - mn) / (mx - mn || 1)) * (h - 2)).toFixed(1)}`).join(' ');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}"/></svg>`;
+};
+const GROUP = Object.fromEntries(GROUPS.map((g) => [g.id, g]));
 
 async function copy(text) {
   try {
@@ -38,14 +47,15 @@ async function copy(text) {
     document.execCommand('copy');
     ta.remove();
   }
-  toast('СКОПИРОВАНО');
+  toast('Скопировано');
 }
 function toast(t) {
   const el = $('#toast');
+  if (!el) return;
   el.textContent = t;
   el.classList.add('on');
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => el.classList.remove('on'), 1600);
+  toast.t = setTimeout(() => el.classList.remove('on'), 1800);
 }
 
 // ---------- комната из ссылки ----------
@@ -57,7 +67,7 @@ if (hash.get('c')) {
     store.set('keys', keys);
   } catch {}
 }
-let nick = store.get('nick', '') || 'гость-' + randHex(2);
+let nick = store.get('nick', '') || 'Гость ' + randHex(2).toUpperCase();
 
 const app = $('#app');
 if (hash.get('r') && hash.get('k')) chat(hash.get('r'), unb64url(hash.get('k')));
@@ -66,16 +76,12 @@ else welcome();
 function welcome() {
   app.innerHTML = `
   <div class="welcome">
-    <pre class="logo">
- ___ ___ ___
-| _ \\_  ) _ \\
-|  _// /|  _/
-|_| /___|_|  MESH</pre>
-    <p class="amb">ТЕРМИНАЛ МНОГОКАНАЛЬНОЙ СВЯЗИ</p>
-    <p class="dim">Сообщение шифруется, делится по Шамиру на n долей и уходит по n каналам сразу. Любые ${K} доли собирают его обратно, 2 перехваченные ничего не раскрывают.</p>
-    <label class="field"><span>ПОЗЫВНОЙ</span><input id="nick" maxlength="20" value="${esc(nick)}" autocomplete="off"></label>
-    <button class="btn big" id="create">[ СОЗДАТЬ КОМНАТУ ]</button>
-    <p class="dim small">Друг подключается по ссылке-приглашению.<span class="cursor">▌</span></p>
+    <img class="appicon" src="apple-touch-icon.png" alt="">
+    <h1>P2P Mesh</h1>
+    <p class="lead">Сообщение шифруется, делится по схеме Шамира на n долей и уходит сразу по n независимым каналам. Любые ${K} доли собирают его, две перехваченные ничего не раскрывают.</p>
+    <div class="group"><label class="cell input"><span>Имя</span><input id="nick" maxlength="20" value="${esc(nick)}" autocomplete="off"></label></div>
+    <button class="primary" id="create">Создать комнату</button>
+    <p class="foot">Друг подключается по ссылке-приглашению</p>
   </div>`;
   $('#create').onclick = () => {
     nick = $('#nick').value.trim() || nick;
@@ -94,9 +100,17 @@ function inviteLink(room, key) {
   return l;
 }
 
+// состояние канала для точки и подписи
+function status(c) {
+  if (!c) return { cls: 'soon', text: 'Скоро' };
+  if (!c.enabled) return { cls: 'off', text: 'Выключен' };
+  if (!c.ready()) return c.state === 'connecting' ? { cls: 'wait', text: 'Подключение…' } : { cls: 'down', text: 'Нет связи' };
+  return now() - c.lastPeer < 20000 ? { cls: 'peer', text: 'Друг на связи' } : { cls: 'up', text: 'Подключён, друга не слышно' };
+}
+
 function chat(room, key, fresh) {
-  const ui = { open: store.get('panel', false), both: false, auto: false, mode: 'para', size: 300, every: 1500 };
-  const rows = new Map(); // id сообщения → элемент
+  const ui = { auto: false, mode: 'para', size: 300, every: 1500 };
+  const rows = new Map();
   const mesh = new Mesh({
     room,
     key,
@@ -104,60 +118,67 @@ function chat(room, key, fresh) {
     keys,
     onChange: () => render(),
     onMessage: (box, late) => incoming(box, late),
+    onCtl: (c, on) => {
+      const t = `${mesh.peerNick || 'Друг'} ${on ? 'включил' : 'выключил'} ${c.short || c.name} · ${hhmm()}`;
+      toast(t);
+      sys(t);
+    },
   });
 
   app.innerHTML = `
-  <header class="top">
-    <div class="brand">P2P-MESH<span class="cursor">▌</span></div>
-    <div class="peer" id="peer"></div>
-  </header>
-  <nav class="tabs">
-    <button class="btn" data-sheet="invite">ПРИГЛАСИТЬ</button>
-    <button class="btn" data-sheet="catalog">КАТАЛОГ</button>
-    <button class="btn" data-sheet="results">ИТОГИ</button>
-  </nav>
-  <section class="panel">
-    <button class="ptitle" id="ptoggle"></button>
-    <div id="tiles" class="tiles"></div>
-    <div class="score" id="score"></div>
-  </section>
-  <main class="log" id="log"></main>
-  <footer class="compose">
-    <div class="autobar">
-      <button class="chip" id="auto">АВТОТЕКСТ</button>
-      <button class="chip" id="mode"></button>
-      <label class="size"><input type="range" id="size" min="20" max="2000" step="10" value="${ui.size}"><span id="sizev"></span></label>
-      <button class="chip" id="every"></button>
+  <header class="nav">
+    <div class="navrow">
+      <div class="titles"><h1>P2P Mesh</h1><p id="sub"></p></div>
+      <div class="navbtns">
+        <button class="icon" data-sheet="invite" aria-label="Пригласить">${ICON.invite}</button>
+        <button class="icon" data-sheet="catalog" aria-label="Каталог каналов">${ICON.list}</button>
+        <button class="icon" data-sheet="results" aria-label="Итоги">${ICON.chart}</button>
+      </div>
     </div>
-    <form class="line" id="form">
-      <span class="prompt">&gt;</span>
-      <input id="msg" placeholder="сообщение" autocomplete="off" enterkeyhint="send">
-      <button class="btn send" aria-label="Отправить">⏎</button>
+    <button class="summary" id="summary" data-sheet="results"></button>
+    <div class="strip" id="strip"></div>
+  </header>
+  <main class="log" id="log"></main>
+  <footer class="composer">
+    <div class="autobar">
+      <button class="pill" id="auto"></button>
+      <div class="seg" id="mode"><button data-m="para">Абзацы</button><button data-m="words">Слова</button></div>
+      <label class="size"><input type="range" id="size" min="20" max="10000" step="10" value="${ui.size}"><span id="sizev"></span></label>
+      <button class="pill" id="every"></button>
+    </div>
+    <form class="inputrow" id="form">
+      <input id="msg" placeholder="Сообщение" autocomplete="off" enterkeyhint="send">
+      <button class="send" aria-label="Отправить">${ICON.up}</button>
     </form>
   </footer>
-  <div class="sheet" id="sheet"><div class="sheet-in"><div class="sheet-head"><span id="sheet-title"></span><button class="btn" id="sheet-x">[X]</button></div><div id="sheet-body"></div></div></div>
+  <div class="scrim" id="scrim"></div>
+  <section class="sheet" id="sheet" aria-modal="true" role="dialog">
+    <div class="grabber"></div>
+    <div class="sheethead"><button class="back" id="sheet-back" hidden>‹ Назад</button><h2 id="sheet-title"></h2><button class="done" id="sheet-x">Готово</button></div>
+    <div class="sheetbody" id="sheet-body"></div>
+  </section>
   <div id="toast" class="toast"></div>`;
 
   const log = $('#log');
-  const sys = (t, cls = 'dim') => {
+  const sys = (t) => {
     const d = document.createElement('div');
-    d.className = 'sys ' + cls;
-    d.textContent = `[${clock()}] *** ${t}`;
+    d.className = 'sys';
+    d.textContent = t;
     log.append(d);
     log.scrollTop = log.scrollHeight;
   };
-  sys(`КОМНАТА ${room.toUpperCase()} · ВЫ ${nick.toUpperCase()} · КАНАЛОВ ${mesh.channels.length}`, 'amb');
-  sys(fresh ? 'ОТПРАВЬТЕ ДРУГУ ПРИГЛАШЕНИЕ: КНОПКА «ПРИГЛАСИТЬ»' : 'ПОДКЛЮЧАЮСЬ К КАНАЛАМ…');
+  sys(`Комната ${room.toUpperCase()} · ${mesh.channels.length} каналов · ${hhmm()}`);
+  if (fresh) sys('Отправьте другу приглашение: кнопка вверху справа');
 
   // ---------- сообщения ----------
-  function addMsg(id, who, text, mine, auto) {
+  const nm = (id) => mesh.byId[id]?.short || mesh.byId[id]?.name || id;
+  function addMsg(id, text, mine, auto, who) {
     const d = document.createElement('div');
     d.className = 'msg' + (mine ? ' mine' : '') + (auto ? ' auto' : '');
-    const short = auto && text.length > 160;
-    d.innerHTML = `<div class="mline"><span class="who">[${clock()}] &lt;${esc(who)}&gt;</span> <span class="txt">${esc(short ? text.slice(0, 160) + '…' : text)}</span></div><div class="meta"></div>`;
-    if (short) d.querySelector('.txt').onclick = (e) => (e.target.textContent = text);
-    d.querySelector('.meta').onclick = () => d.classList.toggle('open');
-    const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    const short = auto && text.length > 220;
+    d.innerHTML = `${!mine && who ? `<div class="who">${esc(who)}</div>` : ''}<div class="bubble">${esc(short ? text.slice(0, 220) + '…' : text)}</div><div class="cap"></div>`;
+    d.querySelector('.bubble').onclick = () => openSheet('delivery', id);
+    const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
     log.append(d);
     while (log.children.length > 300) log.firstChild.remove();
     if (stick) log.scrollTop = log.scrollHeight;
@@ -165,39 +186,29 @@ function chat(room, key, fresh) {
     if (rows.size > 300) rows.delete(rows.keys().next().value);
     return d;
   }
-  const nm = (id) => mesh.byId[id]?.name || id;
-
-  function metaMine(m) {
-    const acked = m.acks.size;
-    const parts = [`${acked >= K ? '✓✓' : acked ? '✓' : '…'} ${acked}/${m.n} долей`];
-    if (m.t3 != null) parts.push(`3/${m.n}: ${ms(m.t3)}мс`);
-    if (m.best5 != null) parts.push(`3/5 лучш.: ${ms(m.best5)}мс`);
-    if (m.used) parts.push(`собрано у друга: ${m.used.map(nm).join(' + ')}`);
-    const detail = [...m.sends].map(([id, s]) => `${nm(id).padEnd(18)} ${s.rtt != null ? ms(s.rtt) + 'мс' : s.lost ? 'ПОТЕРЯНА' : '…'}`).join('\n');
-    return `↳ ${parts.join(' · ')}<pre class="detail">${esc(detail)}</pre>`;
+  function capMine(m) {
+    const a = m.acks.size;
+    const parts = [a >= K ? 'Доставлено' : a ? 'Доставляется' : 'Отправлено', `${a} из ${m.n}`];
+    if (m.best5 != null) parts.push(`${ms(m.best5)} мс`);
+    return parts.join(' · ');
   }
-  function metaIn(box) {
-    const parts = [`собрано из ${K}/${box.n} за ${ms(box.ms)}мс: ${box.used.map(nm).join(' + ')}`, `пришло ${box.pts.length}/${box.n}`];
-    const detail = box.pts.map((p) => `${nm(p.ch).padEnd(18)} +${ms(p.dt)}мс${box.used.includes(p.ch) ? '  ◆' : ''}`).join('\n');
-    return `↳ ${parts.join(' · ')}<pre class="detail">${esc(detail)}</pre>`;
-  }
+  const capIn = (box) => `Собрано из 3 · ${ms(box.ms)} мс · пришло ${box.pts.length} из ${box.n}`;
 
   function incoming(box, late) {
     let d = rows.get(box.id);
-    if (!late && !d) d = addMsg(box.id, box.msg.n || mesh.peerNick || 'друг', box.msg.text, false, box.msg.auto);
-    if (d) d.querySelector('.meta').innerHTML = metaIn(box);
+    if (!late && !d) d = addMsg(box.id, box.msg.text, false, box.msg.auto, box.msg.n || mesh.peerNick);
+    if (d) d.querySelector('.cap').textContent = capIn(box);
   }
 
   function send(text, auto) {
     const r = mesh.send(text, auto);
     if (r.error) {
-      if (!auto) sys('ОШИБКА: ' + r.error.toUpperCase(), 'red');
+      if (!auto) toast('Нужно минимум 3 рабочих канала');
       return false;
     }
-    addMsg(r.msg.id, nick, text, true, auto);
+    addMsg(r.msg.id, text, true, auto);
     return true;
   }
-
   $('#form').onsubmit = (e) => {
     e.preventDefault();
     const v = $('#msg').value.trim();
@@ -207,93 +218,84 @@ function chat(room, key, fresh) {
 
   // ---------- автотекст ----------
   let autoT;
-  const modes = { para: 'АБЗАЦЫ', words: 'СЛОВА' };
   const everys = [500, 1000, 1500, 3000, 5000];
   const syncAuto = () => {
     $('#auto').classList.toggle('on', ui.auto);
-    $('#auto').textContent = ui.auto ? '■ АВТО' : '▶ АВТОТЕКСТ';
-    $('#mode').textContent = modes[ui.mode];
-    $('#sizev').textContent = ui.size + 'с';
-    $('#every').textContent = (ui.every / 1000).toString().replace('.', ',') + 'с';
+    $('#auto').innerHTML = `${ui.auto ? ICON.stop : ICON.play}<span>Авто</span>`;
+    $('#mode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === ui.mode));
+    $('#sizev').textContent = ui.size;
+    $('#every').textContent = (ui.every / 1000).toString().replace('.', ',') + ' с';
     clearInterval(autoT);
     if (ui.auto) autoT = setInterval(() => send(randomText(ui.mode, ui.size), true), ui.every);
   };
-  $('#auto').onclick = () => {
-    ui.auto = !ui.auto;
-    syncAuto();
-    wake();
-  };
-  $('#mode').onclick = () => ((ui.mode = ui.mode === 'para' ? 'words' : 'para'), syncAuto());
+  $('#auto').onclick = () => ((ui.auto = !ui.auto), syncAuto(), wake());
+  $('#mode').onclick = (e) => e.target.dataset.m && ((ui.mode = e.target.dataset.m), syncAuto());
   $('#every').onclick = () => ((ui.every = everys[(everys.indexOf(ui.every) + 1) % everys.length]), syncAuto());
-  $('#size').oninput = (e) => ((ui.size = +e.target.value), ($('#sizev').textContent = ui.size + 'с'));
+  $('#size').oninput = (e) => ((ui.size = +e.target.value), ($('#sizev').textContent = ui.size));
   $('#size').onchange = syncAuto;
   syncAuto();
 
-  $('#ptoggle').onclick = () => {
-    ui.open = !ui.open;
-    store.set('panel', ui.open);
-    render();
-  };
-  $('#tiles').onclick = (e) => {
+  $('#strip').onclick = (e) => {
     const t = e.target.closest('[data-ch]');
-    if (!t) return;
-    const c = mesh.byId[t.dataset.ch];
-    mesh.setEnabled(c.id, !c.enabled, ui.both);
-    toast(`${c.name} ${c.enabled ? 'ВКЛ' : 'ВЫКЛ'}${ui.both ? ' У ОБОИХ' : ''}`);
+    if (t) openSheet('channel', t.dataset.ch);
   };
 
-  // ---------- шапка и плитки каналов ----------
+  // ---------- шапка ----------
   let wasOnline = false;
   function render() {
     const online = mesh.peerOnline();
     if (online !== wasOnline) {
-      sys(online ? `${(mesh.peerNick || 'ДРУГ').toUpperCase()} НА СВЯЗИ` : 'ДРУГ ПРОПАЛ СО СВЯЗИ', online ? 'amb' : 'red');
+      sys(online ? `${mesh.peerNick || 'Друг'} на связи · ${hhmm()}` : `${mesh.peerNick || 'Друг'} не отвечает · ${hhmm()}`);
       wasOnline = online;
     }
     const act = mesh.active().length;
-    const t = now();
-    $('#peer').innerHTML = `<span class="${act >= K ? '' : 'red'}">SHAMIR ${K}/${act}</span> <span class="${online ? 'amb' : 'dim'}">${online ? '● ' + esc(mesh.peerNick || 'ДРУГ').toUpperCase() : '○ ЖДУ ДРУГА'}</span>`;
-    const up = mesh.channels.filter((c) => c.ready()).length;
-    $('#ptoggle').textContent = `[${ui.open ? '−' : '+'}] КАНАЛЫ ${up}/${mesh.channels.length} ${ui.open ? '' : '· ПОДРОБНО'}`;
-    $('#tiles').className = 'tiles' + (ui.open ? ' open' : '');
-    $('#tiles').innerHTML =
-      mesh.channels
-        .map((c) => {
-          const st = !c.enabled ? 'off' : c.ready() ? (t - c.lastPeer < 20000 ? 'peer' : 'up') : c.state === 'connecting' ? 'wait' : 'down';
-          const med = median(c.rtts);
-          const loss = c.sent ? Math.round((c.lost / c.sent) * 100) : null;
-          const icon = { off: '○', peer: '●', up: '◐', wait: '◌', down: '✕' }[st];
-          const val = !c.enabled ? 'ВЫКЛ' : st === 'down' ? 'НЕТ' : c.last != null ? ms(c.last) : '··';
-          if (!ui.open) return `<button class="tile ${st}" data-ch="${c.id}"><b>${icon} ${esc((c.short || c.name).slice(0, 10))}</b><i>${val}</i></button>`;
-          return `<button class="row ${st}" data-ch="${c.id}"><span class="rn">${icon} ${esc(c.name)}</span><span>${val}</span><span>${ms(med)}</span><span>${ms(pct(c.rtts, 0.95))}</span><span>${loss == null ? '--' : loss + '%'}</span><span class="rs">${esc(c.err || c.host || '')} ${spark(c.rtts.slice(-16))}</span></button>`;
-        })
-        .join('') +
-      (ui.open
-        ? `<div class="rowhead"><span>КАНАЛ</span><span>ПОСЛ</span><span>МЕД</span><span>P95</span><span>ПОТ</span></div><label class="bothsw"><input type="checkbox" id="both" ${ui.both ? 'checked' : ''}> ВЫКЛЮЧАТЬ У ОБОИХ</label>`
-        : '');
-    const both = $('#both');
-    if (both) both.onchange = (e) => (ui.both = e.target.checked);
+    $('#sub').innerHTML = `<span class="dot ${online ? 'peer' : 'wait'}"></span>${online ? esc(mesh.peerNick || 'Друг') + ' на связи' : 'Ждём друга'} · <b class="${act >= K ? '' : 'bad'}">Шамир 3 из ${act}</b>`;
+    $('#strip').innerHTML = mesh.channels
+      .map((c) => {
+        const s = status(c);
+        const val = !c.enabled ? 'выкл' : !c.ready() ? '—' : c.last != null ? ms(c.last) : '···';
+        return `<button class="chip ${s.cls}" data-ch="${c.id}"><span class="dot ${s.cls}"></span><span class="cn">${esc(c.short || c.name)}</span><span class="cv">${val}</span></button>`;
+      })
+      .join('');
     const h = mesh.history;
     const last = h[h.length - 1];
-    $('#score').innerHTML = last
-      ? `<span>3/${last.n}: <b>${ms(last.t3)}</b>мс</span><span>3/5 ЛУЧШ: <b>${ms(last.best5)}</b>мс</span><span>МЕД 3/5: ${ms(median(h.map((m) => m.best5).filter((v) => v != null)))}мс</span><span class="sp">${spark(h.slice(-24).map((m) => m.best5 ?? m.t3))}</span>`
-      : `<span class="dim">ЗАМЕР НАЧНЁТСЯ С ПЕРВЫМ СООБЩЕНИЕМ · ▶ АВТОТЕКСТ = ПОСТОЯННЫЙ ЗАМЕР</span>`;
+    const b5 = h.map((m) => m.best5 ?? m.t3).filter((v) => v != null);
+    $('#summary').innerHTML = last
+      ? `<div><small>3 из 5 лучших</small><b>${ms(last.best5 ?? last.t3)}<i> мс</i></b></div><div><small>Скорость 3/5</small><b>${kb([...h].reverse().find((m) => m.kbps != null)?.kbps)}<i> КБ/с</i></b></div><div><small>Трафик ↑ ↓</small><b class="sm">${kb(mesh.rate(mesh.tx))} · ${kb(mesh.rate(mesh.rx))}<i> КБ/с</i></b></div><div class="sp">${spark(b5.slice(-30))}</div>`
+      : `<div class="hint">Замер начнётся с первого сообщения. «Авто» включает постоянный замер.</div>`;
     for (const [id, d] of [...rows].slice(-40)) {
       const m = mesh.out.get(id);
-      if (m) d.querySelector('.meta').innerHTML = metaMine(m);
+      if (m) d.querySelector('.cap').textContent = capMine(m);
     }
-    if (sheetOpen === 'results') sheetResults();
+    if (sheetOpen === 'results') resultsLive();
+    if (sheetOpen === 'channel') channelLive();
+    if (sheetOpen === 'delivery') sheetDelivery(sheetArg);
+    if (sheetOpen === 'catalog') catalogLive();
   }
 
   // ---------- листы ----------
-  let sheetOpen = null;
+  let sheetOpen = null, sheetArg = null, sheetFrom = null;
   const sheet = $('#sheet');
-  function openSheet(name) {
+  const pages = { invite: sheetInvite, catalog: sheetCatalog, results: sheetResults, channel: sheetChannel, delivery: sheetDelivery };
+  function openSheet(name, arg, from = null) {
     sheetOpen = name;
+    sheetArg = arg;
+    sheetFrom = from;
+    $('#sheet-back').hidden = !from;
+    $('#sheet-body').onclick = null;
+    pages[name](arg);
+    $('#sheet-body').scrollTop = 0;
     sheet.classList.add('on');
-    ({ invite: sheetInvite, catalog: sheetCatalog, results: sheetResults })[name]();
+    $('#scrim').classList.add('on');
   }
-  $('#sheet-x').onclick = () => ((sheetOpen = null), sheet.classList.remove('on'));
+  const closeSheet = () => {
+    sheetOpen = null;
+    sheet.classList.remove('on');
+    $('#scrim').classList.remove('on');
+  };
+  $('#sheet-x').onclick = closeSheet;
+  $('#scrim').onclick = closeSheet;
+  $('#sheet-back').onclick = () => openSheet(sheetFrom);
   document.querySelectorAll('[data-sheet]').forEach((b) => (b.onclick = () => openSheet(b.dataset.sheet)));
 
   function sheetInvite() {
@@ -301,92 +303,183 @@ function chat(room, key, fresh) {
     const q = qrcode(0, 'L');
     q.addData(link);
     q.make();
-    $('#sheet-title').textContent = 'ПРИГЛАШЕНИЕ';
+    $('#sheet-title').textContent = 'Приглашение';
     $('#sheet-body').innerHTML = `
-      <div class="qr">${q.createSvgTag({ cellSize: 4, margin: 3, scalable: true })}</div>
-      <p class="dim small">Ключ комнаты и ключи ящиков — в части ссылки после #. Она не уходит на сервер. Ссылку держите между собой.</p>
-      <div class="linkbox">${esc(link)}</div>
-      <div class="btns"><button class="btn" id="cp">[ КОПИРОВАТЬ ]</button>${navigator.share ? '<button class="btn" id="sh">[ ПОДЕЛИТЬСЯ ]</button>' : ''}</div>`;
+      <div class="qr">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>
+      <p class="note center">Отсканируйте камерой или отправьте ссылку. Ключ комнаты и ключи ящиков находятся в части ссылки после #, она не уходит на сервер.</p>
+      <div class="group">
+        <button class="cell action" id="cp">Скопировать ссылку</button>
+        ${navigator.share ? '<button class="cell action" id="sh">Поделиться…</button>' : ''}
+      </div>`;
     $('#cp').onclick = () => copy(link);
-    if ($('#sh')) $('#sh').onclick = () => navigator.share({ title: 'P2P-MESH', text: 'Заходи в комнату', url: link }).catch(() => {});
+    if ($('#sh')) $('#sh').onclick = () => navigator.share({ title: 'P2P Mesh', text: 'Заходи в комнату', url: link }).catch(() => {});
   }
 
+  const toggle = (id, on) => `<label class="switch"><input type="checkbox" data-tog="${id}" ${on ? 'checked' : ''}><span></span></label>`;
+  function bindToggles(root) {
+    root.querySelectorAll('[data-tog]').forEach((i) => {
+      i.onclick = (e) => e.stopPropagation();
+      i.onchange = () => {
+        mesh.setEnabled(i.dataset.tog, i.checked);
+        const c = mesh.byId[i.dataset.tog];
+        toast(`${c.short || c.name} ${i.checked ? 'включён' : 'выключен'} у обоих`);
+        sys(`Вы ${i.checked ? 'включили' : 'выключили'} ${c.short || c.name} у обоих · ${hhmm()}`);
+      };
+    });
+  }
+  const subline = (c) => {
+    const s = status(c);
+    return `${s.text}${c.last != null && c.ready() && c.enabled ? ' · ' + ms(c.last) + ' мс' : ''}`;
+  };
+
   function sheetCatalog() {
-    $('#sheet-title').textContent = 'КАТАЛОГ КАНАЛОВ';
-    $('#sheet-body').innerHTML = GROUPS.map((g) => {
-      const items = CATALOG.filter((d) => d.group === g.id);
-      return `<h3>▓ ${esc(g.title.toUpperCase())} <span class="dim">· ${esc(g.note)}</span></h3>` +
-        items
+    $('#sheet-title').textContent = 'Каналы';
+    $('#sheet-body').innerHTML =
+      `<p class="note">Нажмите на канал, чтобы узнать, как он работает. Переключатель выключает канал сразу у вас и у друга.</p>` +
+      GROUPS.map((g) => {
+        const items = CATALOG.filter((d) => d.group === g.id);
+        return `<h3>${esc(g.title)} · ${esc(g.note)}</h3><div class="group">${items
           .map((d) => {
             const c = mesh.byId[d.id];
-            let right = '';
-            if (d.soon) right = `<span class="badge ${d.group === 'fun' ? 'fun' : ''}">${d.group === 'fun' ? 'МЕМ · СКОРО' : 'СКОРО'}</span>`;
-            else if (c) right = `<button class="chip ${c.enabled ? 'on' : ''}" data-tog="${d.id}">${c.enabled ? 'ВКЛ' : 'ВЫКЛ'}</button>`;
-            else right = `<button class="chip" data-conn="${d.id}">ПОДКЛЮЧИТЬ</button>`;
-            const state = c ? (c.ready() ? 'на связи' : c.err || c.state) : '';
-            const form = d.fields
-              ? `<div class="form" id="f-${d.id}" hidden><p class="dim small">${esc(d.help)}</p>${d.fields
-                  .map(([k, label, ph]) => `<label class="field"><span>${esc(label)}</span><input data-k="${k}" placeholder="${esc(ph)}" value="${esc(keys[d.id]?.[k] || '')}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)
-                  .join('')}<div class="btns"><button class="btn" data-save="${d.id}">[ СОХРАНИТЬ ]</button>${keys[d.id] ? `<button class="btn" data-del="${d.id}">[ УБРАТЬ ]</button>` : ''}</div></div>`
-              : '';
-            return `<div class="cat ${d.soon ? 'soon' : ''}"><div class="cat-h"><div><b>${esc(d.name)}</b> <span class="dim small">${esc(d.host || '')}</span></div>${right}</div>${d.about || state ? `<div class="dim small">${esc(d.about || '')}${state ? ` <span class="amb">[${esc(state)}]</span>` : ''}</div>` : ''}${c && d.fields ? `<button class="link small" data-conn="${d.id}">изменить ключи</button>` : ''}${form}</div>`;
+            const cls = d.soon ? 'soon' : c ? status(c).cls : 'off';
+            const right = d.soon ? `<span class="badge ${d.group === 'fun' ? 'fun' : ''}">${d.group === 'fun' ? 'Мем · скоро' : 'Скоро'}</span>` : c ? toggle(d.id, c.enabled) : `<span class="link">Подключить ›</span>`;
+            const sub = d.soon ? d.about : c ? subline(c) : 'Нужен ключ';
+            return `<div class="cell row" data-open="${d.id}"><span class="dot ${cls}" data-dot="${d.id}"></span><div class="rt"><div>${esc(d.name)}</div><small data-st="${d.id}">${esc(sub)}</small></div>${right}</div>`;
           })
-          .join('');
-    }).join('');
-    const body = $('#sheet-body');
-    body.onclick = (e) => {
-      const b = e.target.closest('button');
-      if (!b) return;
-      if (b.dataset.tog) {
-        const c = mesh.byId[b.dataset.tog];
-        mesh.setEnabled(c.id, !c.enabled, ui.both);
-        sheetCatalog();
-      } else if (b.dataset.conn) {
-        const f = $('#f-' + b.dataset.conn);
-        f.hidden = !f.hidden;
-      } else if (b.dataset.save) {
-        const id = b.dataset.save;
-        const v = {};
-        $('#f-' + id).querySelectorAll('input').forEach((i) => (v[i.dataset.k] = i.value.trim()));
-        if (Object.values(v).some((x) => !x)) return toast('ЗАПОЛНИТЕ ВСЕ ПОЛЯ');
-        keys = { ...keys, [id]: v };
-        store.set('keys', keys);
-        history.replaceState(null, '', inviteLink(room, key).replace(location.origin + location.pathname, ''));
-        location.reload();
-      } else if (b.dataset.del) {
-        delete keys[b.dataset.del];
+          .join('')}</div><p class="note">${esc(g.plain)}</p>`;
+      }).join('');
+    bindToggles($('#sheet-body'));
+    $('#sheet-body').onclick = (e) => {
+      const r = e.target.closest('[data-open]');
+      if (r && !e.target.closest('.switch')) openSheet('channel', r.dataset.open, 'catalog');
+    };
+  }
+  function catalogLive() {
+    for (const c of mesh.channels) {
+      const el = $(`[data-st="${c.id}"]`);
+      if (!el) continue;
+      el.textContent = subline(c);
+      $(`[data-dot="${c.id}"]`).className = 'dot ' + status(c).cls;
+      const t = $(`[data-tog="${c.id}"]`);
+      if (t) t.checked = c.enabled;
+    }
+  }
+
+  function sheetChannel(id) {
+    const d = CATALOG.find((x) => x.id === id);
+    const c = mesh.byId[id];
+    $('#sheet-title').textContent = d.short || d.name;
+    $('#sheet-body').innerHTML = `
+      <div class="hero"><span class="dot big ${c ? status(c).cls : d.soon ? 'soon' : 'off'}" id="ch-dot"></span><div><div class="htitle">${esc(d.name)}</div><small>${esc(GROUP[d.group].title)}${d.host ? ' · ' + esc(d.host) : ''}</small></div></div>
+      ${c ? `<div class="stats" id="ch-stats"></div>` : ''}
+      ${c ? `<div class="group"><div class="cell row"><div class="rt"><div>Использовать канал</div><small>Переключается сразу у обоих</small></div>${toggle(id, c.enabled)}</div></div>` : ''}
+      <h3>Простыми словами</h3>
+      <div class="group"><div class="cell text">${esc(GROUP[d.group].plain)}</div></div>
+      <h3>Как устроено</h3>
+      <div class="group"><div class="cell text">${esc(d.about || '')}${d.soon ? `<p class="soonnote">${d.group === 'fun' ? 'Мемный канал, появится позже.' : 'Появится позже.'}</p>` : ''}</div></div>
+      ${c ? `<h3>Состояние</h3><div class="group"><div class="cell text mono" id="ch-err"></div></div>` : ''}
+      ${d.fields ? keyForm(d) : ''}`;
+    bindToggles($('#sheet-body'));
+    bindKeyForm(d);
+    if (c) channelLive();
+  }
+  function channelLive() {
+    const c = mesh.byId[sheetArg];
+    if (!c || !$('#ch-stats')) return;
+    const s = status(c);
+    $('#ch-dot').className = 'dot big ' + s.cls;
+    const loss = c.sent ? Math.round((c.lost / c.sent) * 100) + '%' : '—';
+    $('#ch-stats').innerHTML =
+      [['Последний', ms(c.last), 'мс'], ['Медиана', ms(median(c.rtts)), 'мс'], ['P95', ms(pct(c.rtts, 0.95)), 'мс'], ['Потери', loss, ''], ['Скорость', kb(kbps(c.bw)), 'КБ/с'], ['Отправлено', kb((c.txB || 0) / 1000), 'КБ']].map(([l, v, u]) => `<div><small>${l}</small><b>${v}<i>${u ? ' ' + u : ''}</i></b></div>`).join('') +
+      `<div class="wide">${spark(c.rtts.slice(-40), 300, 40) || '<small>Пока нет замеров</small>'}</div>`;
+    $('#ch-err').textContent = `${s.text}${c.err ? ' · ' + c.err : ''}\nОтправлено долей: ${c.sent}, подтверждено: ${c.acked}\nЗамеров RTT: ${c.rtts.length}${c.minGap ? `\nДоля не чаще раза в ${c.minGap / 1000} с` : ''}`;
+    const t = $(`[data-tog="${c.id}"]`);
+    if (t) t.checked = c.enabled;
+  }
+
+  function keyForm(d) {
+    return `<h3>Ключи</h3><div class="group">${d.fields
+      .map(([k, label, ph]) => `<label class="cell input"><span>${esc(label)}</span><input data-k="${k}" placeholder="${esc(ph)}" value="${esc(keys[d.id]?.[k] || '')}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)
+      .join('')}</div><p class="note">${esc(d.help)}</p><div class="group"><button class="cell action" id="ksave">Сохранить и переподключить</button>${keys[d.id] ? '<button class="cell action danger" id="kdel">Удалить ключи</button>' : ''}</div>`;
+  }
+  function bindKeyForm(d) {
+    if (!$('#ksave')) return;
+    $('#ksave').onclick = () => {
+      const v = {};
+      $('#sheet-body').querySelectorAll('[data-k]').forEach((i) => (v[i.dataset.k] = i.value.trim()));
+      if (Object.values(v).some((x) => !x)) return toast('Заполните все поля');
+      keys = { ...keys, [d.id]: v };
+      store.set('keys', keys);
+      history.replaceState(null, '', inviteLink(room, key).replace(location.origin + location.pathname, ''));
+      location.reload();
+    };
+    if ($('#kdel'))
+      $('#kdel').onclick = () => {
+        delete keys[d.id];
         store.set('keys', keys);
         history.replaceState(null, '', `#r=${room}&k=${b64url(key)}`);
         location.reload();
-      }
+      };
+  }
+
+  function sheetDelivery(id) {
+    const m = mesh.out.get(id);
+    const box = mesh.inbox.get(id);
+    $('#sheet-title').textContent = 'Доставка';
+    let head, list;
+    if (m) {
+      head = [['3 из 5 лучших', ms(m.best5), 'мс'], ['Скорость 3/5', kb(m.kbps), 'КБ/с'], [`3 из ${m.n}`, ms(m.t3), 'мс'], ['Подтверждено', `${m.acks.size}/${m.n}`, ''], ['Размер', kb(m.bytes / 1000), 'КБ']];
+      list = [...m.sends].sort((a, b) => (a[1].rtt ?? 1e9) - (b[1].rtt ?? 1e9)).map(([cid, s]) => [cid, s.rtt != null ? `${ms(s.rtt)} мс · ${kb(s.b / (s.rtt / 2))} КБ/с` : s.lost ? 'Потеряна' : 'В пути…', m.used?.includes(cid)]);
+    } else if (box) {
+      head = [['Сборка', ms(box.ms), 'мс'], ['Пришло долей', `${box.pts.length}/${box.n}`, '']];
+      list = [...box.pts].sort((a, b) => a.dt - b.dt).map((p) => [p.ch, '+' + ms(p.dt) + ' мс', box.used?.includes(p.ch)]);
+    } else return;
+    $('#sheet-body').innerHTML = `<div class="stats">${head.map(([l, v, u]) => `<div><small>${l}</small><b>${v}<i>${u ? ' ' + u : ''}</i></b></div>`).join('')}</div>
+      <h3>Доли по каналам</h3><div class="group">${list.map(([cid, v, used]) => `<div class="cell row" data-open="${cid}"><span class="dot ${used ? 'peer' : 'up'}"></span><div class="rt"><div>${esc(nm(cid))}</div>${used ? '<small>Использована при сборке</small>' : ''}</div><span class="val">${v}</span></div>`).join('')}</div>
+      <p class="note">${m ? 'Время туда и обратно: доля дошла, друг подтвердил её по тому же каналу.' : 'Время от первой пришедшей доли.'} Зелёные доли собрали сообщение.</p>`;
+    $('#sheet-body').onclick = (e) => {
+      const r = e.target.closest('[data-open]');
+      if (r) openSheet('channel', r.dataset.open);
     };
   }
 
   function resultsText() {
     const h = mesh.history;
-    const lines = [`P2P-MESH · комната ${room} · ${nick} · ${new Date().toLocaleString('ru')}`, `сообщений: ${h.length}`];
     const b5 = h.map((m) => m.best5).filter((v) => v != null);
     const t3 = h.map((m) => m.t3).filter((v) => v != null);
-    lines.push(`3/5 лучших: медиана ${ms(median(b5))} мс · p95 ${ms(pct(b5, 0.95))} мс`);
-    lines.push(`3/n все:    медиана ${ms(median(t3))} мс · p95 ${ms(pct(t3, 0.95))} мс`, '');
-    lines.push('КАНАЛ               СТАТУС  МЕД    P95    ПОТЕРИ  ЗАМЕРОВ');
+    const lines = [`P2P Mesh · комната ${room} · ${nick} · ${new Date().toLocaleString('ru')}`, `Сообщений: ${h.length}`, `3 из 5 лучших: медиана ${ms(median(b5))} мс, p95 ${ms(pct(b5, 0.95))} мс`, `3 из n:        медиана ${ms(median(t3))} мс, p95 ${ms(pct(t3, 0.95))} мс`, `Скорость 3/5: медиана ${kb(median(h.map((m) => m.kbps).filter((v) => v != null)))} КБ/с`, '', 'Канал            Статус  Мед    P95    КБ/с   Потери Замеров'];
     const sorted = [...mesh.channels].sort((a, b) => (median(a.rtts) ?? 1e9) - (median(b.rtts) ?? 1e9));
     for (const c of sorted) {
       const st = !c.enabled ? 'выкл' : c.ready() ? 'ok' : 'нет';
       const loss = c.sent ? Math.round((c.lost / c.sent) * 100) + '%' : '--';
-      lines.push(`${c.name.padEnd(19)} ${st.padEnd(7)} ${ms(median(c.rtts)).padEnd(6)} ${ms(pct(c.rtts, 0.95)).padEnd(6)} ${loss.padEnd(7)} ${c.rtts.length}${c.err ? '  ' + c.err : ''}`);
+      lines.push(`${(c.short || c.name).padEnd(16)} ${st.padEnd(7)} ${ms(median(c.rtts)).padEnd(6)} ${ms(pct(c.rtts, 0.95)).padEnd(6)} ${kb(kbps(c.bw)).padEnd(6)} ${loss.padEnd(6)} ${c.rtts.length}${c.err ? '  ' + c.err : ''}`);
     }
-    lines.push('', 'Время туда-обратно (RTT), мс. 3/5 лучших = третья доля среди 5 каналов с лучшей медианой.');
+    lines.push('', 'RTT туда и обратно, мс. 3 из 5 лучших = третья доля среди 5 каналов с лучшей медианой. Скорость = байты доли / время в одну сторону (RTT/2).');
     return lines.join('\n');
   }
   function sheetResults() {
-    $('#sheet-title').textContent = 'ИТОГИ ЗАМЕРА';
-    const txt = resultsText();
-    const pre = $('#sheet-body pre');
-    if (pre) return void (pre.textContent = txt);
-    $('#sheet-body').innerHTML = `<pre class="results"></pre><div class="btns"><button class="btn" id="cpr">[ СКОПИРОВАТЬ ИТОГИ ]</button></div>`;
-    $('#sheet-body pre').textContent = txt;
+    $('#sheet-title').textContent = 'Итоги';
+    $('#sheet-body').innerHTML = `<div class="stats" id="r-stats"></div><h3>Каналы по скорости</h3><div class="group" id="r-list"></div><div class="group"><button class="cell action" id="cpr">Скопировать итоги</button></div>`;
     $('#cpr').onclick = () => copy(resultsText());
+    $('#sheet-body').onclick = (e) => {
+      const r = e.target.closest('[data-open]');
+      if (r) openSheet('channel', r.dataset.open, 'results');
+    };
+    resultsLive();
+  }
+  function resultsLive() {
+    const h = mesh.history;
+    const b5 = h.map((m) => m.best5 ?? m.t3).filter((v) => v != null);
+    const t3 = h.map((m) => m.t3).filter((v) => v != null);
+    const sp = h.map((m) => m.kbps).filter((v) => v != null);
+    $('#r-stats').innerHTML = `<div><small>3 из 5 · медиана</small><b>${ms(median(b5))}<i> мс</i></b></div><div><small>Скорость 3/5 · медиана</small><b>${kb(median(sp))}<i> КБ/с</i></b></div><div><small>Трафик ↑ ↓</small><b>${kb(mesh.rate(mesh.tx))} · ${kb(mesh.rate(mesh.rx))}<i> КБ/с</i></b></div><div><small>3 из 5 · p95</small><b>${ms(pct(b5, 0.95))}<i> мс</i></b></div><div><small>3 из n · медиана</small><b>${ms(median(t3))}<i> мс</i></b></div><div><small>Сообщений</small><b>${h.length}</b></div><div class="wide">${spark(b5.slice(-60), 300, 40) || '<small>Пока нет замеров</small>'}</div>`;
+    const sorted = [...mesh.channels].sort((a, b) => (median(a.rtts) ?? 1e9) - (median(b.rtts) ?? 1e9));
+    $('#r-list').innerHTML = sorted
+      .map((c) => {
+        const loss = c.sent ? Math.round((c.lost / c.sent) * 100) : null;
+        return `<div class="cell row" data-open="${c.id}"><span class="dot ${status(c).cls}"></span><div class="rt"><div>${esc(c.short || c.name)}</div><small>p95 ${ms(pct(c.rtts, 0.95))} мс · потери ${loss == null ? '—' : loss + '%'}</small></div><span class="val">${ms(median(c.rtts))} мс<br><small>${kb(kbps(c.bw))} КБ/с</small></span></div>`;
+      })
+      .join('');
   }
 
   // ---------- экран не гаснет ----------

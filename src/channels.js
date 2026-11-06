@@ -12,6 +12,7 @@ export class Channel {
     this.err = '';
     this.enabled = true;
     this.rtts = [];
+    this.bw = []; // [байт доли, время в одну сторону]
     this.sent = 0;
     this.acked = 0;
     this.lost = 0;
@@ -98,11 +99,27 @@ export class WebRTCChannel extends Channel {
   bind(dc) {
     this.dc = dc;
     dc.onopen = () => {
-      const pair = this.pc?.sctp?.transport?.iceTransport?.getSelectedCandidatePair?.();
-      this.set('up', pair ? `${pair.local.type} ↔ ${pair.remote.type}` : '');
+      this.set('up');
+      this.route();
     };
     dc.onclose = () => this.set('down', 'канал закрыт');
     dc.onmessage = (e) => this.recv(e.data);
+  }
+  // какой путь выбрал ICE: IPv4 или IPv6, напрямую (host), через NAT (srflx) или через релей
+  async route() {
+    try {
+      const st = await this.pc.getStats();
+      let pair;
+      st.forEach((r) => {
+        if (r.type === 'transport' && r.selectedCandidatePairId) pair = st.get(r.selectedCandidatePairId);
+      });
+      if (!pair) st.forEach((r) => r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || r.selected) && (pair = r));
+      if (!pair) return;
+      const l = st.get(pair.localCandidateId), r = st.get(pair.remoteCandidateId);
+      const ip = (l?.address || l?.ip || '').includes(':') ? 'IPv6' : 'IPv4';
+      this.err = `${ip} · ${l?.candidateType} ↔ ${r?.candidateType} · ${l?.protocol || ''}`;
+      this.ctx.changed();
+    } catch {}
   }
   gathered(pc) {
     return new Promise((res) => {
@@ -393,68 +410,65 @@ export class GitHubChannel extends Channel {
 }
 
 // ---------- Каталог ----------
-const nostr = (id, host, short) => ({ id, name: host.toUpperCase(), short, kind: NostrChannel, url: 'wss://' + host, group: 'nostr', host });
-const mq = (id, name, url) => ({ id, name, short: name, kind: MqttChannel, url, group: 'mqtt', host: new URL(url).host });
+const nostr = (id, host, short) => ({ id, name: host, short, kind: NostrChannel, url: 'wss://' + host, group: 'nostr', host, about: `Публичный релей сети Nostr. Доля уходит подписанным эфемерным событием (kind 23333) с меткой комнаты; релей рассылает его подписчикам и не хранит. Регистрация не нужна, ключ подписи страница создаёт сама при каждом запуске.` });
+const mq = (id, name, url) => ({ id, name, short: name, kind: MqttChannel, url, group: 'mqtt', host: new URL(url).host, about: `Публичный тестовый брокер MQTT ${name}. Подключение по WebSocket, доля публикуется в топик комнаты без хранения (QoS 0). Брокер открыт всем, поэтому имя топика — хеш ключа комнаты, а содержимое зашифровано.` });
 
 export const GROUPS = [
-  { id: 'direct', title: 'Прямой P2P', note: 'телефон ↔ телефон, без посредника' },
-  { id: 'nostr', title: 'Nostr-релеи', note: 'публичные, без регистрации' },
-  { id: 'mqtt', title: 'MQTT-брокеры', note: 'публичные, без регистрации' },
-  { id: 'https', title: 'HTTPS-релеи', note: 'публичные, без регистрации' },
-  { id: 'box', title: 'Абонентские ящики', note: 'нужна регистрация и ключ' },
-  { id: 'ru', title: 'РФ-каналы', note: 'для режима белых списков' },
-  { id: 'soon', title: 'Скоро', note: 'в работе' },
-  { id: 'fun', title: 'Шутливые', note: 'мемные · скоро' },
+  { id: 'direct', title: 'Прямой P2P', note: 'Без посредника и лимитов',
+    plain: 'Телефоны говорят друг с другом напрямую, как две рации. Это самый быстрый путь. Но иногда мобильный оператор не даёт так соединиться, и тогда канал просто не включится.' },
+  { id: 'nostr', title: 'Nostr-релеи', note: 'Без лимитов трафика',
+    plain: 'Это как общие доски объявлений в интернете, которые держат добровольцы. Телефон вешает записку с долей сообщения, телефон друга сразу её видит. Доска общая, но прочитать записку нельзя: она зашифрована, а одна доля сама по себе ничего не значит.' },
+  { id: 'mqtt', title: 'MQTT-брокеры', note: 'Без лимитов трафика',
+    plain: 'Это как почтовое отделение для умных устройств вроде датчиков и лампочек. Один кладёт письмо в ячейку с номером, другой тут же его забирает. Номер ячейки знаете только вы двое.' },
+  { id: 'ru', title: 'РФ-каналы', note: 'Для режима белых списков',
+    plain: 'Российские сервисы. Они остаются доступны, даже когда в РФ включают «белые списки» и всё зарубежное перестаёт открываться.' },
+  { id: 'soon', title: 'Скоро', note: 'Не подключены',
+    plain: 'Способы, которые пока не подключены. У одних есть лимиты трафика или частоты, поэтому бесконечно гонять через них данные нельзя. Другим нужно настоящее приложение вместо сайта или отдельное железо.' },
+  { id: 'fun', title: 'Шутливые', note: 'Мемные · скоро',
+    plain: 'Шутка с долей правды: формально это тоже независимые каналы связи. Просто очень медленные.' },
 ];
 
 export const CATALOG = [
-  { id: 'webrtc', name: 'WEBRTC.DIRECT', short: 'WEBRTC', kind: WebRTCChannel, group: 'direct', host: 'STUN google/twilio', about: 'Прямое соединение двух браузеров. Через мобильный CGNAT может не установиться.' },
-  nostr('n-noslol', 'nos.lol', 'NOS.LOL'),
-  nostr('n-mom', 'nostr.mom', 'MOM'),
-  nostr('n-oxtr', 'nostr.oxtr.dev', 'OXTR'),
-  nostr('n-primal', 'relay.primal.net', 'PRIMAL'),
-  nostr('n-wellorder', 'nostr-pub.wellorder.net', 'WELLORDER'),
-  nostr('n-snort', 'relay.snort.social', 'SNORT'),
-  nostr('n-nostrnet', 'relay.nostr.net', 'NOSTR.NET'),
-  { ...nostr('n-damus', 'relay.damus.io', 'DAMUS'), minGap: 5000, hiEvery: 20000, about: 'Строгий лимит частоты, поэтому доля не чаще раза в 5 с.' },
-  mq('m-hivemq', 'HIVEMQ', 'wss://broker.hivemq.com:8884/mqtt'),
+  { id: 'webrtc', name: 'WebRTC напрямую', short: 'WebRTC', kind: WebRTCChannel, group: 'direct', host: 'STUN google/twilio', about: 'Прямое соединение двух браузеров по WebRTC DataChannel. Публичные STUN-серверы только помогают узнать внешний адрес, данные идут напрямую телефон ↔ телефон. Параметры соединения передаются через остальные каналы. Через мобильный CGNAT может не установиться: тогда нужен TURN-релей.' },
+  nostr('n-noslol', 'nos.lol', 'nos.lol'),
+  nostr('n-mom', 'nostr.mom', 'nostr.mom'),
+  nostr('n-oxtr', 'nostr.oxtr.dev', 'oxtr'),
+  nostr('n-primal', 'relay.primal.net', 'Primal'),
+  nostr('n-wellorder', 'nostr-pub.wellorder.net', 'Wellorder'),
+  nostr('n-snort', 'relay.snort.social', 'Snort'),
+  nostr('n-nostrnet', 'relay.nostr.net', 'nostr.net'),
+  mq('m-hivemq', 'HiveMQ', 'wss://broker.hivemq.com:8884/mqtt'),
   mq('m-emqx', 'EMQX', 'wss://broker.emqx.io:8084/mqtt'),
-  mq('m-mosq', 'MOSQUITTO', 'wss://test.mosquitto.org:8081/mqtt'),
-  mq('m-eclipse', 'ECLIPSE', 'wss://mqtt.eclipseprojects.io:443/mqtt'),
-  { id: 'ntfy', name: 'NTFY.SH', short: 'NTFY', kind: NtfyChannel, url: 'https://ntfy.sh', group: 'https', host: 'ntfy.sh', minGap: 15000, hiEvery: 60000, about: 'Бесплатно ~250 сообщений в день, поэтому доля уходит не чаще раза в 15 с.' },
-  { id: 'supabase', name: 'SUPABASE', kind: SupabaseChannel, group: 'box', host: 'supabase.co', fields: [['url', 'Project URL', 'https://xxxx.supabase.co'], ['key', 'anon public key', 'eyJ...']], help: 'supabase.com → New project → Project Settings → API: скопируй Project URL и anon public key.' },
-  { id: 'ably', name: 'ABLY', kind: AblyChannel, group: 'box', host: 'ably.io', fields: [['key', 'API key', 'xxxx.yyyy:zzzz']], help: 'ably.com → Sign up → приложение создастся само → API Keys: скопируй Root key.' },
-  { id: 'firebase', name: 'FIREBASE', kind: FirebaseChannel, group: 'box', host: 'firebaseio.com', fields: [['url', 'Database URL', 'https://xxx-default-rtdb.firebaseio.com']], help: 'console.firebase.google.com → проект → Realtime Database → Create database → «Start in test mode». Скопируй URL базы.' },
-  { id: 'upstash', name: 'UPSTASH', kind: UpstashChannel, group: 'box', host: 'upstash.io', hiEvery: 10000, fields: [['url', 'REST URL', 'https://xxx.upstash.io'], ['token', 'REST token', 'AX...']], help: 'console.upstash.com → Create Database (Redis) → REST API: скопируй UPSTASH_REDIS_REST_URL и TOKEN. Опрос раз в секунду тратит лимит команд.' },
-  { id: 'matrix', name: 'MATRIX', kind: MatrixChannel, group: 'box', host: 'matrix.org', minGap: 3000, hiEvery: 15000, fields: [['hs', 'Homeserver', 'https://matrix-client.matrix.org'], ['token', 'Access token', 'syt_...'], ['room', 'Room ID', '!abc:matrix.org']], help: 'app.element.io → зарегистрируйся → создай комнату → Settings → Help & About → Access token; Room ID в настройках комнаты → Advanced. Обоим хватит одного аккаунта.' },
-  { id: 'github', name: 'GITHUB.ISSUE', kind: GitHubChannel, group: 'box', host: 'api.github.com', minGap: 6000, hiEvery: 30000, fields: [['token', 'Fine-grained token', 'github_pat_...'], ['repo', 'Репозиторий', 'user/p2p-box'], ['issue', 'Номер issue', '1']], help: 'Создай приватный репозиторий и issue в нём. Settings → Developer settings → Fine-grained token только на этот репозиторий, право Issues: Read and write.' },
-  { id: 'yandex', name: 'YANDEX.STORAGE', group: 'ru', soon: true, host: 'storage.yandexcloud.net', about: 'Ящик-файл на российском IP. Нужна проверка CORS.' },
-  { id: 'yadisk', name: 'YANDEX.DISK', group: 'ru', soon: true, host: 'cloud-api.yandex.net', about: 'Файлы на Диске как ящик, OAuth-токен.' },
+  mq('m-mosq', 'Mosquitto', 'wss://test.mosquitto.org:8081/mqtt'),
+  mq('m-eclipse', 'Eclipse', 'wss://mqtt.eclipseprojects.io:443/mqtt'),
+  { id: 'yandex', name: 'Yandex Object Storage', group: 'ru', soon: true, host: 'storage.yandexcloud.net', about: 'Ящик-файл на российском IP. Нужна проверка CORS.' },
+  { id: 'yadisk', name: 'Яндекс Диск', group: 'ru', soon: true, host: 'cloud-api.yandex.net', about: 'Файлы на Диске как ящик, OAuth-токен.' },
   { id: 'vk', name: 'VK', group: 'ru', soon: true, host: 'api.vk.com', about: 'API не пускает запросы со сторонних страниц.' },
   ...[
-    ['turn', 'WEBRTC.TURN', 'Релей для WebRTC, нужен ключ Metered или Cloudflare'],
-    ['telegram', 'TELEGRAM.BOT', 'Два бота и канал; в РФ ограничен'],
-    ['email', 'EMAIL', 'Из браузера напрямую SMTP не отправить'],
+    ['ntfy', 'ntfy.sh', 'Бесплатно около 250 сообщений в день, для бесконечного обмена не годится'],
+    ['supabase', 'Supabase Realtime', 'Бесплатно около 2 млн сообщений в месяц'],
+    ['ably', 'Ably', 'Бесплатно около 6 млн сообщений в месяц'],
+    ['firebase', 'Firebase RTDB', 'Бесплатно около 10 ГБ трафика в месяц'],
+    ['upstash', 'Upstash Redis', 'Лимит команд в месяц, опрос его быстро съедает'],
+    ['matrix', 'Matrix', 'Сервер ограничивает частоту сообщений'],
+    ['github', 'GitHub Issue', 'Жёсткие лимиты на частоту комментариев'],
+    ['damus', 'relay.damus.io', 'Строгий лимит частоты, банит за частые события'],
+    ['turn', 'WebRTC через TURN', 'Релей для WebRTC, нужен ключ Metered или Cloudflare'],
+    ['telegram', 'Telegram-бот', 'Два бота и канал; в РФ ограничен'],
+    ['email', 'Email', 'Из браузера напрямую SMTP не отправить'],
     ['ipfs', 'IPFS', 'Асинхронный ящик по CID'],
-    ['tron', 'TRON.MEMO', 'Блокчейн как почтовый ящик'],
-    ['tor', 'TOR', 'В РФ только через мосты'],
-    ['ble', 'BLUETOOTH LE', 'В Safari на iOS нет Web Bluetooth'],
+    ['tron', 'TRON memo', 'Блокчейн как почтовый ящик'],
+    ['tor', 'Tor', 'В РФ только через мосты'],
+    ['ble', 'Bluetooth LE', 'В Safari на iOS нет Web Bluetooth'],
     ['nfc', 'NFC', 'В Safari на iOS нет Web NFC'],
-    ['audio', 'АКУСТИЧЕСКИЙ МОДЕМ', 'Данные звуком через динамик и микрофон'],
-    ['qr', 'QR-КОДЫ', 'Ручная передача камерой'],
-    ['lora', 'LORA / MESHTASTIC', 'Нужно внешнее радио'],
-    ['findmy', 'FIND MY / SEND MY', 'Чужие iPhone как ретрансляторы, ~3 Б/с'],
+    ['audio', 'Акустический модем', 'Данные звуком через динамик и микрофон, когда телефоны рядом'],
+    ['callmodem', 'Звонок + аудиомодем', 'Данные превращаются в звук и идут по обычному телефонному звонку, как у старых модемов. Работает даже без мобильного интернета, если есть голосовая связь. Голосовые кодеки и шумоподавление искажают сигнал, поэтому нужна коррекция ошибок. Сайт не может сам позвонить и слушать звонок: нужно приложение или внешний модем'],
+    ['qr', 'QR-коды', 'Ручная передача камерой'],
+    ['lora', 'LoRa / Meshtastic', 'Нужно внешнее радио'],
+    ['findmy', 'Find My / Send My', 'Чужие iPhone как ретрансляторы, ~3 Б/с'],
   ].map(([id, name, about]) => ({ id, name, about, group: 'soon', soon: true })),
   ...[
-    ['spotify', 'SPOTIFY.PLAYLIST', 'Трек в общем плейлисте как код сообщения. В РФ Spotify нет, это часть мема'],
-    ['pigeon', 'ГОЛУБИ RFC 1149', 'IP over Avian Carriers. Packet loss — это кошка'],
-    ['pochta', 'ПОЧТА РОССИИ', 'Store-and-forward с непредсказуемым TTL'],
-    ['smoke', 'ДЫМОВЫЕ СИГНАЛЫ', 'Беспроводная связь без лицензии, зависит от ветра'],
-    ['bottle', 'БУТЫЛКА В МОРЕ', 'UDP с максимальной географической распределённостью'],
-    ['parrots', 'ДВА ПОПУГАЯ', 'Голосовой mesh, payload может измениться'],
-    ['kid', 'РЕБЁНОК С ЗАПИСКОЙ', 'At-least-once, сообщение может стать котиком'],
-    ['truck', 'ГРУЗОВИК С SSD', 'Петабайты пропускной способности, latency чудовищная'],
-    ['moon', 'ЛАЗЕР НА ЛУНУ', 'Публичный broadcast, независимая инфраструктура'],
-    ['neighbor', 'СОСЕД ЗА СТЕНОЙ', 'Пассивный ретранслятор с гарантированным broadcast'],
+    ['spotify', 'Spotify-плейлист', 'Трек в общем плейлисте как код сообщения. В РФ Spotify нет, это часть мема'],
+    ['pigeon', 'Голуби RFC 1149', 'IP over Avian Carriers. Packet loss — это кошка'],
   ].map(([id, name, about]) => ({ id, name, about, group: 'fun', soon: true })),
 ];

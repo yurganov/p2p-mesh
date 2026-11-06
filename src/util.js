@@ -46,3 +46,10 @@ export const pct = (a, p) => {
   return s[Math.min(s.length - 1, Math.floor(s.length * p))];
 };
 export const ms = (v) => (v == null ? '--' : v < 10 ? v.toFixed(1) : String(Math.round(v)));
+// скорость канала: байты подтверждённых долей / время в одну сторону (байт/мс = КБ/с)
+export const kbps = (bw) => {
+  if (!bw.length) return null;
+  const b = bw.reduce((a, x) => a + x[0], 0), t = bw.reduce((a, x) => a + x[1], 0);
+  return t ? b / t : null;
+};
+export const kb = (v) => (v == null ? '—' : v < 10 ? v.toFixed(1).replace('.', ',') : String(Math.round(v)));

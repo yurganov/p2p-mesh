@@ -8,8 +8,8 @@ const ACK_TIMEOUT = 10000;
 const PEER_TIMEOUT = 20000;
 
 export class Mesh {
-  constructor({ room, key, nick, keys, disabled, onChange, onMessage }) {
-    Object.assign(this, { room, key, nick, onChange, onMessage });
+  constructor({ room, key, nick, keys, disabled, onChange, onMessage, onCtl }) {
+    Object.assign(this, { room, key, nick, onChange, onMessage, onCtl });
     this.topic = bytesToHex(sha256(utf8ToBytes(`p2pmesh|${room}|${bytesToHex(key)}`))).slice(0, 24);
     this.me = randHex(4);
     this.peer = null;
@@ -26,6 +26,8 @@ export class Mesh {
     this.byId = Object.fromEntries(this.channels.map((c) => [c.id, c]));
     this.rtc = this.byId.webrtc;
     this.lastRtcTry = 0;
+    this.tx = [];
+    this.rx = [];
   }
 
   start() {
@@ -61,7 +63,7 @@ export class Mesh {
     for (const c of this.channels) {
       if (c.enabled && c.ready() && t - c.lastHi > c.hiEvery) {
         c.lastHi = t;
-        c.send(this.frame({ t: 'hi', n: this.nick, ts: t }));
+        c.send(this.frame({ t: 'hi', nk: this.nick, ts: t }));
       }
     }
     for (const m of this.out.values()) {
@@ -78,6 +80,17 @@ export class Mesh {
       this.rtc.connect(this.peer);
     }
     this.changed();
+  }
+
+  // скользящий счётчик байт за 5 с
+  count(arr, b, t) {
+    arr.push([t, b]);
+    while (arr.length && t - arr[0][0] > 5000) arr.shift();
+  }
+  rate(arr) {
+    const t = now();
+    while (arr.length && t - arr[0][0] > 5000) arr.shift();
+    return arr.reduce((a, [, b]) => a + b, 0) / 5000; // байт/мс = КБ/с
   }
 
   peerOnline() {
@@ -103,9 +116,12 @@ export class Mesh {
     if (this.peer !== o.f) {
       this.peer = o.f;
       this.lastRtcTry = 0;
+      // новый собеседник получает мои выключенные каналы, чтобы состояние совпало
+      setTimeout(() => this.channels.filter((c) => !c.enabled).forEach((c) => this.broadcast({ t: 'ctl', ch: c.id, on: false, to: this.peer, sid: randHex(4) })), 500);
     }
     ch.lastPeer = t;
-    if (o.n) this.peerNick = o.n;
+    if (o.nk) this.peerNick = o.nk;
+    this.count(this.rx, s.length, t);
     switch (o.t) {
       case 'hi':
         ch.send(this.frame({ t: 'ho', ts: o.ts, to: o.f }));
@@ -136,7 +152,10 @@ export class Mesh {
       case 'ctl':
         if (this.sigSeen.has(o.sid)) return;
         this.sigSeen.add(o.sid);
-        if (this.byId[o.ch]) this.byId[o.ch].enabled = o.on;
+        if (this.byId[o.ch] && this.byId[o.ch].enabled !== o.on) {
+          this.byId[o.ch].enabled = o.on;
+          this.onCtl?.(this.byId[o.ch], o.on);
+        }
         break;
     }
     this.changed();
@@ -155,10 +174,14 @@ export class Mesh {
     const shares = split(blob, act.length, K);
     const t = now();
     const m = { id, mine: true, text, auto, n: act.length, t0: t, sends: new Map(), acks: new Map(), used: null, at: Date.now() };
+    m.bytes = blob.length;
     act.forEach((c, i) => {
       const { x, y } = shares[i];
-      m.sends.set(c.id, { x, t });
-      c.send(this.frame({ t: 's', id, x, k: K, n: act.length, d: b64(y) }));
+      const f = this.frame({ t: 's', id, x, k: K, n: act.length, d: b64(y) });
+      m.sends.set(c.id, { x, t, b: f.length });
+      c.send(f);
+      c.txB = (c.txB || 0) + f.length;
+      this.count(this.tx, f.length, t);
       c.sent++;
       c.lastShare = t;
     });
@@ -178,6 +201,8 @@ export class Mesh {
     m.acks.set(ch.id, rtt);
     ch.acked++;
     this.addRtt(ch, rtt);
+    ch.bw.push([s.b, rtt / 2]);
+    if (ch.bw.length > 30) ch.bw.shift();
     this.score(m);
   }
 
@@ -194,6 +219,7 @@ export class Mesh {
       .filter((v) => v != null)
       .sort((a, b) => a - b);
     if (best.length >= K) m.best5 = best[K - 1];
+    if (m.best5 != null) m.kbps = m.bytes / (m.best5 / 2);
     if (m.t3 != null && !m.scored) {
       m.scored = true;
       this.history.push(m);
@@ -236,11 +262,13 @@ export class Mesh {
     return null;
   }
 
-  setEnabled(id, on, both) {
+  // Переключение синхронное: команда уходит другу по всем каналам, включая сам переключаемый.
+  setEnabled(id, on) {
     const c = this.byId[id];
     if (!c) return;
-    if (both && this.peer) this.broadcast({ t: 'ctl', ch: id, on, to: this.peer, sid: randHex(4) });
-    c.enabled = on;
+    const ctl = () => this.peer && this.broadcast({ t: 'ctl', ch: id, on, to: this.peer, sid: randHex(4) });
+    if (on) (c.enabled = true), ctl();
+    else ctl(), (c.enabled = false);
     this.changed();
   }
 }
