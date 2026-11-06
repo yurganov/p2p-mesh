@@ -37,6 +37,7 @@ const spark = (vals, w = 64, h = 18) => {
 };
 const GROUP = Object.fromEntries(GROUPS.map((g) => [g.id, g]));
 // сколько раз канал попал в тройку, из которой собрано сообщение
+const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
 const wins = (useds) => {
   const cnt = new Map();
   for (const u of useds) for (const id of u) cnt.set(id, (cnt.get(id) || 0) + 1);
@@ -276,7 +277,7 @@ function chat(room, key, fresh) {
           .slice(0, 3)
           .map(([id, n], i) => {
             const p = Math.round((n / wf.total) * 100);
-            return `<span class="w"><span class="wh"><span class="rank r${i + 1}">${i + 1}</span><span class="wn">${esc(nm(id))}</span></span><span class="bar"><span style="width:${p}%"></span></span><span class="wp">${p}% · ${n} из ${wf.total}</span></span>`;
+            return `<span class="w"><span class="wh"><span class="rank r${i + 1}">${i + 1}</span><span class="wn">${esc(nm(id))}</span></span><span class="bar"><span style="width:${p}%"></span></span><span class="wp">${p}% · ${n} из ${wf.total}</span><span class="wp">пинг ${ms(avg(mesh.byId[id]?.rtts || []))} мс</span></span>`;
           })
           .join('')}</div>`
       : '';
@@ -495,7 +496,7 @@ function chat(room, key, fresh) {
     $('#r-stats').innerHTML = `<div><small>3 из 5 · медиана</small><b>${ms(median(b5))}<i> мс</i></b></div><div><small>Скорость 3/5 · медиана</small><b>${kb(median(sp))}<i> КБ/с</i></b></div><div><small>Трафик ↑ ↓</small><b>${kb(mesh.rate(mesh.tx))} · ${kb(mesh.rate(mesh.rx))}<i> КБ/с</i></b></div><div><small>3 из 5 · p95</small><b>${ms(pct(b5, 0.95))}<i> мс</i></b></div><div><small>3 из n · медиана</small><b>${ms(median(t3))}<i> мс</i></b></div><div><small>Сообщений</small><b>${h.length}</b></div><div class="wide">${spark(b5.slice(-60), 300, 40) || '<small>Пока нет замеров</small>'}</div>`;
     const winList = (w) =>
       w.total
-        ? w.top.map(([id, n], i) => `<div class="cell row" data-open="${id}"><span class="rank">${i + 1}</span><div class="rt"><div>${esc(nm(id))}</div><small>${n} из ${w.total}</small></div><span class="val">${Math.round((n / w.total) * 100)}%</span></div>`).join('')
+        ? w.top.map(([id, n], i) => `<div class="cell row" data-open="${id}"><span class="rank">${i + 1}</span><div class="rt"><div>${esc(nm(id))}</div><small>${n} из ${w.total} · средний пинг ${ms(avg(mesh.byId[id]?.rtts || []))} мс</small></div><span class="val">${Math.round((n / w.total) * 100)}%</span></div>`).join('')
         : '<div class="cell"><small class="muted">Пока нет собранных сообщений</small></div>';
     $('#r-wf').innerHTML = winList(wins([...mesh.out.values()].map((m) => m.used).filter(Boolean)));
     $('#r-wm').innerHTML = winList(wins([...mesh.inbox.values()].map((b) => b.used).filter(Boolean)));
