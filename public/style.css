@@ -80,8 +80,18 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .val { text-align: right; }
 .summary .hint { font-size: 13px; color: var(--label2); }
 .summary { flex-wrap: wrap; row-gap: 6px; }
-.top3 { flex-basis: 100%; font-size: 12px; color: var(--label2); border-top: 0.5px solid var(--sep); padding-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.top3 b { color: var(--label); font-weight: 600; }
+.summary > .top3 { flex-basis: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 10px; flex-direction: initial; border-top: 0.5px solid var(--sep); padding-top: 7px; }
+.top3 .th { grid-column: 1 / -1; font-size: 11px; color: var(--label2); }
+.top3 .w { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.top3 .wh { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.top3 .wn { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top3 .rank { width: 16px; height: 16px; font-size: 10px; }
+.top3 .wp { font-size: 11px; color: var(--label2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bar { height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--green); border-radius: 2px; }
+.rank.r1 { background: #ffd60a; color: #5c4400; }
+.rank.r2 { background: #d1d1d6; color: #3a3a3c; }
+.rank.r3 { background: #e0a370; color: #4d2a0d; }
 .rank { width: 22px; height: 22px; border-radius: 50%; background: var(--fill); display: grid; place-items: center; font-size: 12px; font-weight: 600; flex: none; }
 .row:nth-child(1) .rank { background: #ffd60a; color: #5c4400; }
 .row:nth-child(2) .rank { background: #d1d1d6; color: #3a3a3c; }

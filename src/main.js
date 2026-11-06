@@ -271,7 +271,15 @@ function chat(room, key, fresh) {
     const last = h[h.length - 1];
     const b5 = h.map((m) => m.best5 ?? m.t3).filter((v) => v != null);
     const wf = wins([...mesh.out.values()].map((m) => m.used).filter(Boolean));
-    const topLine = wf.total ? `<div class="top3">Побеждают у друга: ${wf.top.slice(0, 3).map(([id, n]) => `<b>${esc(nm(id))}</b> ${Math.round((n / wf.total) * 100)}%`).join(' · ')}</div>` : '';
+    const topLine = wf.total
+      ? `<div class="top3"><span class="th">Побеждают у друга · ${wf.total} сообщ.</span>${wf.top
+          .slice(0, 3)
+          .map(([id, n], i) => {
+            const p = Math.round((n / wf.total) * 100);
+            return `<span class="w"><span class="wh"><span class="rank r${i + 1}">${i + 1}</span><span class="wn">${esc(nm(id))}</span></span><span class="bar"><span style="width:${p}%"></span></span><span class="wp">${p}% · ${n} из ${wf.total}</span></span>`;
+          })
+          .join('')}</div>`
+      : '';
     $('#summary').innerHTML = (last
       ? `<div><small>3 из 5 лучших</small><b>${ms(last.best5 ?? last.t3)}<i> мс</i></b></div><div><small>Скорость 3/5</small><b>${kb([...h].reverse().find((m) => m.kbps != null)?.kbps)}<i> КБ/с</i></b></div><div><small>Трафик ↑ ↓</small><b class="sm">${kb(mesh.rate(mesh.tx))} · ${kb(mesh.rate(mesh.rx))}<i> КБ/с</i></b></div><div class="sp">${spark(b5.slice(-30))}</div>`
       : `<div class="hint">Замер начнётся с первого сообщения. «Авто» включает постоянный замер.</div>`) + topLine;
