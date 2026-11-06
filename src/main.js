@@ -261,7 +261,9 @@ function chat(room, key, fresh) {
     }
     const act = mesh.active().length;
     $('#sub').innerHTML = `<span class="dot ${online ? 'peer' : 'wait'}"></span>${online ? esc(mesh.peerNick || 'Друг') + ' на связи' : 'Ждём друга'} · <b class="${act >= K ? '' : 'bad'}">Шамир 3 из ${act}</b>`;
-    $('#strip').innerHTML = mesh.channels
+    const RANK = { peer: 0, up: 1, wait: 2, dead: 3, down: 4, off: 5 };
+    $('#strip').innerHTML = [...mesh.channels]
+      .sort((a, b) => RANK[status(a).cls] - RANK[status(b).cls] || (median(a.rtts) ?? 1e9) - (median(b.rtts) ?? 1e9))
       .map((c) => {
         const s = status(c);
         const val = !c.enabled ? 'выкл' : !c.ready() ? '—' : c.dead ? 'искл.' : c.last != null ? ms(c.last) : '···';
@@ -480,7 +482,7 @@ function chat(room, key, fresh) {
   }
   function sheetResults() {
     $('#sheet-title').textContent = 'Итоги';
-    $('#sheet-body').innerHTML = `<div class="stats" id="r-stats"></div><h3>Победители у друга</h3><div class="group" id="r-wf"></div><p class="note">Как часто канал попадал в тройку, из которой друг собрал ваше сообщение.</p><h3>Победители у вас</h3><div class="group" id="r-wm"></div><p class="note">То же для сообщений друга, собранных у вас.</p><h3>Каналы по скорости</h3><div class="group" id="r-list"></div><div class="group"><button class="cell action" id="cpr">Скопировать итоги</button></div>`;
+    $('#sheet-body').innerHTML = `<div class="stats" id="r-stats"></div><h3>Победители у друга</h3><div class="group" id="r-wf"></div><p class="note">Как часто канал попадал в тройку, из которой друг собрал ваше сообщение.</p><h3>Победители у вас</h3><div class="group" id="r-wm"></div><p class="note">То же для сообщений друга, собранных у вас.</p><h3>Каналы: сначала рабочие, по скорости</h3><div class="group" id="r-list"></div><div class="group"><button class="cell action" id="cpr">Скопировать итоги</button></div>`;
     $('#cpr').onclick = () => copy(resultsText());
     $('#sheet-body').onclick = (e) => {
       const r = e.target.closest('[data-open]');
@@ -500,7 +502,8 @@ function chat(room, key, fresh) {
         : '<div class="cell"><small class="muted">Пока нет собранных сообщений</small></div>';
     $('#r-wf').innerHTML = winList(wins([...mesh.out.values()].map((m) => m.used).filter(Boolean)));
     $('#r-wm').innerHTML = winList(wins([...mesh.inbox.values()].map((b) => b.used).filter(Boolean)));
-    const sorted = [...mesh.channels].sort((a, b) => (median(a.rtts) ?? 1e9) - (median(b.rtts) ?? 1e9));
+    const RANK = { peer: 0, up: 1, wait: 2, dead: 3, down: 4, off: 5 };
+    const sorted = [...mesh.channels].sort((a, b) => RANK[status(a).cls] - RANK[status(b).cls] || (median(a.rtts) ?? 1e9) - (median(b.rtts) ?? 1e9));
     $('#r-list').innerHTML = sorted
       .map((c) => {
         const loss = c.sent ? Math.round((c.lost / c.sent) * 100) : null;
