@@ -35,6 +35,8 @@ export class Mesh {
   start() {
     const ctx = {
       topic: this.topic,
+      me: this.me,
+      peer: () => this.peer,
       frame: (ch, s) => this.onFrame(ch, s),
       changed: () => this.changed(),
       signal: (to, m) => this.broadcast({ t: 'sig', to, m, sid: randHex(4) }, (c) => c !== this.rtc),

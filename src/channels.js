@@ -255,6 +255,67 @@ export class NtfyChannel extends Channel {
   }
 }
 
+// ---------- Piping Server: HTTP-труба один к одному ----------
+// Каждый слушает свой адрес …-<мой id> долгим GET; отправитель POST-ит на адрес друга.
+// Сервер держит POST, пока получатель не заберёт, поэтому отправка идёт по одной пачке за раз.
+export class PipingChannel extends Channel {
+  open() {
+    this.q = [];
+    this.busy = false;
+    const gen = (this.gen = (this.gen || 0) + 1);
+    fetch(this.url + '/help', { cache: 'no-store' }).then(
+      (r) => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.set('up');
+        this.listen(gen);
+      },
+      () => {
+        this.set('down', 'сервер недоступен · повтор через 10 с');
+        setTimeout(() => this.start(this.ctx), 10000);
+      },
+    );
+  }
+  path(id) {
+    return `${this.url}/p2pmesh-${this.ctx.topic}-${id}`;
+  }
+  async listen(gen) {
+    while (gen === this.gen) {
+      try {
+        const r = await fetch(this.path(this.ctx.me), { cache: 'no-store' });
+        const t = await r.text();
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        if (this.state !== 'up') this.set('up');
+        for (const line of t.split('\n')) if (line) this.recv(line);
+      } catch (e) {
+        this.set('down', 'приём: ' + (e.message || e));
+        await new Promise((res) => setTimeout(res, 3000));
+      }
+    }
+  }
+  send(s) {
+    this.q.push(s);
+    this.flush();
+  }
+  async flush() {
+    if (this.busy || !this.q.length) return;
+    const to = this.ctx.peer();
+    if (!to) return void (this.q.length = 0);
+    this.busy = true;
+    const body = this.q.splice(0).join('\n');
+    const ac = new AbortController();
+    const tm = setTimeout(() => ac.abort(), 8000);
+    try {
+      const r = await fetch(this.path(to), { method: 'POST', body, signal: ac.signal });
+      if (!r.ok) this.err = 'HTTP ' + r.status;
+    } catch {
+      this.err = 'друг не забрал за 8 с';
+    }
+    clearTimeout(tm);
+    this.busy = false;
+    this.flush();
+  }
+}
+
 // ---------- Абонентские ящики (нужен ключ) ----------
 export class SupabaseChannel extends Channel {
   open() {
@@ -423,6 +484,8 @@ export const GROUPS = [
     plain: 'Это как общие доски объявлений в интернете, которые держат добровольцы. Телефон вешает записку с долей сообщения, телефон друга сразу её видит. Доска общая, но прочитать записку нельзя: она зашифрована, а одна доля сама по себе ничего не значит.' },
   { id: 'mqtt', title: 'MQTT-брокеры', note: 'Без лимитов трафика',
     plain: 'Это как почтовое отделение для умных устройств вроде датчиков и лампочек. Один кладёт письмо в ячейку с номером, другой тут же его забирает. Номер ячейки знаете только вы двое.' },
+  { id: 'https', title: 'HTTP-трубы', note: 'Без лимитов трафика',
+    plain: 'Как пневмопочта между двумя окошками: ты кладёшь записку в трубу с номером друга, она вылетает у него, как только он подставит руку. Сервер ничего не хранит, просто соединяет два запроса.' },
   { id: 'ru', title: 'РФ-каналы', note: 'Для режима белых списков',
     plain: 'Российские сервисы. Они остаются доступны, даже когда в РФ включают «белые списки» и всё зарубежное перестаёт открываться.' },
   { id: 'soon', title: 'Скоро', note: 'Не подключены',
@@ -445,15 +508,17 @@ export const CATALOG = [
   nostr('n-girino', 'nostr.girino.org', 'girino'),
   nostr('n-illuminodes', 'relay.illuminodes.com', 'illuminodes'),
   nostr('n-datahaus', 'nostr.data.haus', 'data.haus'),
+  { id: 'piping', name: 'Piping Server', short: 'Piping', kind: PipingChannel, url: 'https://ppng.io', group: 'https', host: 'ppng.io', about: 'Открытый сервер-труба: получатель держит долгий GET на своём адресе, отправитель делает POST на этот адрес, сервер стыкует их и передаёт поток напрямую, ничего не сохраняя. Работает по обычному HTTPS, поэтому проходит там, где режут WebSocket.' },
   mq('m-hivemq', 'HiveMQ', 'wss://broker.hivemq.com:8884/mqtt'),
   mq('m-emqx', 'EMQX', 'wss://broker.emqx.io:8084/mqtt'),
-  mq('m-emqxcn', 'EMQX-CN', 'wss://broker-cn.emqx.io:8084/mqtt'),
   mq('m-mosq', 'Mosquitto', 'wss://test.mosquitto.org:8081/mqtt'),
   mq('m-eclipse', 'Eclipse', 'wss://mqtt.eclipseprojects.io:443/mqtt'),
   { id: 'yandex', name: 'Yandex Object Storage', group: 'ru', soon: true, host: 'storage.yandexcloud.net', about: 'Ящик-файл на российском IP. Нужна проверка CORS.' },
   { id: 'yadisk', name: 'Яндекс Диск', group: 'ru', soon: true, host: 'cloud-api.yandex.net', about: 'Файлы на Диске как ящик, OAuth-токен.' },
   { id: 'vk', name: 'VK', group: 'ru', soon: true, host: 'api.vk.com', about: 'API не пускает запросы со сторонних страниц.' },
   ...[
+    ['emqxcn', 'EMQX-CN', 'Отвечает, но это тот же кластер, что EMQX: доли пересылаются между ними, значит путь не независимый'],
+    ['httprelay', 'httprelay.io', 'Такой же HTTP-ретранслятор, но сервис больше не отвечает (404)'],
     ['ntfy', 'ntfy.sh', 'Бесплатно около 250 сообщений в день, для бесконечного обмена не годится'],
     ['supabase', 'Supabase Realtime', 'Бесплатно около 2 млн сообщений в месяц'],
     ['ably', 'Ably', 'Бесплатно около 6 млн сообщений в месяц'],
