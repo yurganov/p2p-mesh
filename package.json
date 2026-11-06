@@ -1,0 +1,23 @@
+{
+  "name": "p2p-mesh-test",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "esbuild src/main.js --bundle --format=esm --minify --target=es2020,safari15 --outfile=public/app.js && node stamp.mjs",
+    "watch": "esbuild src/main.js --bundle --format=esm --target=es2020,safari15 --outfile=public/app.js --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@noble/ciphers": "^2.4.0",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "esbuild": "^0.28.2",
+    "mqtt": "^5.16.1",
+    "qrcode-generator": "^2.0.4"
+  }
+}
