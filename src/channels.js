@@ -1,7 +1,7 @@
 // Каталог каналов и драйверы. Каждый драйвер передаёт строки (JSON-кадры) в общую «комнату».
 import * as mqttNs from 'mqtt/dist/mqtt.esm';
 import { schnorr } from '@noble/curves/secp256k1.js';
-import { sha256, bytesToHex, hexToBytes, utf8ToBytes, rand, randHex } from './util.js';
+import { sha256, bytesToHex, hexToBytes, utf8ToBytes, rand, randHex, now } from './util.js';
 
 const mqttConnect = mqttNs.connect || mqttNs.default?.connect;
 
@@ -49,15 +49,31 @@ const ICE = [
   { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
   { urls: 'stun:global.stun.twilio.com:3478' },
   { urls: 'stun:stun.nextcloud.com:443' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.services.mozilla.com:3478' },
 ];
+// типы кандидатов из SDP: host — адрес в своей сети, srflx — внешний адрес через STUN, relay — через TURN
+const candTypes = (sdp) => [...new Set([...(sdp || '').matchAll(/ typ (\w+)/g)].map((m) => m[1]))].join(',') || 'нет';
 
 export class WebRTCChannel extends Channel {
   open() {
     this.set('connecting', 'жду друга для обмена параметрами');
   }
+  // идёт ли попытка: тогда её не рвём повтором
+  busy() {
+    const pc = this.pc;
+    return !!pc && !['failed', 'closed', 'disconnected'].includes(pc.connectionState) && now() - this.startedAt < 25000;
+  }
+  diag(extra) {
+    const pc = this.pc;
+    this.err = `попытка ${this.tries || 0} · ICE ${pc?.iceConnectionState || '—'} · у вас: ${this.mine || '…'} · у друга: ${this.theirs || '…'}${extra ? ' · ' + extra : ''}`;
+    this.ctx?.changed();
+  }
   async connect(peer) {
     this.reset();
     this.peer = peer;
+    this.tries = (this.tries || 0) + 1;
+    this.startedAt = now();
     const pc = this.mk();
     this.bind(pc.createDataChannel('mesh', { ordered: false }));
     await pc.setLocalDescription(await pc.createOffer());
@@ -72,12 +88,16 @@ export class WebRTCChannel extends Channel {
         this.sid = m.sid;
         const pc = this.mk();
         pc.ondatachannel = (e) => this.bind(e.channel);
+        this.theirs = candTypes(m.sdp);
+        this.startedAt = now();
         await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
         await pc.setLocalDescription(await pc.createAnswer());
         await this.gathered(pc);
         this.ctx.signal(from, { kind: 'answer', sdp: pc.localDescription.sdp, sid: m.sid });
       } else if (m.kind === 'answer' && this.pc && m.sid === this.sid && this.pc.signalingState === 'have-local-offer') {
+        this.theirs = candTypes(m.sdp);
         await this.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
+        this.diag();
       }
     } catch (e) {
       this.set('down', 'ошибка WebRTC: ' + (e.message || e));
@@ -88,10 +108,15 @@ export class WebRTCChannel extends Channel {
     const pc = new RTCPeerConnection({ iceServers: ICE });
     this.pc = pc;
     this.set('connecting', 'устанавливаю прямое соединение');
+    pc.oniceconnectionstatechange = () => pc === this.pc && !this.ready() && this.diag();
     pc.onconnectionstatechange = () => {
       if (pc !== this.pc) return;
       const s = pc.connectionState;
-      if (s === 'failed') this.set('down', 'прямое соединение не установилось (NAT)');
+      if (s === 'failed') {
+        this.set('down');
+        const hint = !this.mine?.includes('srflx') || !this.theirs?.includes('srflx') ? 'STUN не ответил: UDP режется' : 'оба за NAT, нужен TURN-релей';
+        this.diag('не соединилось: ' + hint);
+      }
       if (s === 'disconnected' || s === 'closed') this.set('down', 'соединение разорвано');
     };
     return pc;
@@ -123,9 +148,18 @@ export class WebRTCChannel extends Channel {
   }
   gathered(pc) {
     return new Promise((res) => {
-      if (pc.iceGatheringState === 'complete') return res();
-      const t = setTimeout(res, 1500);
-      pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && (clearTimeout(t), res());
+      if (pc.iceGatheringState === 'complete') {
+        this.mine = candTypes(pc.localDescription?.sdp);
+        return res();
+      }
+      const t = setTimeout(done, 2500);
+      pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && (clearTimeout(t), done());
+      const self = this;
+      function done() {
+        self.mine = candTypes(pc.localDescription?.sdp);
+        self.diag();
+        res();
+      }
     });
   }
   reset() {
