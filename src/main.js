@@ -49,6 +49,11 @@ const wins = (useds, channels) => {
     .map(([id, n]) => [id, n]);
   return { total: useds.length, top };
 };
+const speedTop = (channels) =>
+  channels
+    .filter((c) => c.enabled && c.ready() && !c.dead && c.rtts.length)
+    .map((c) => [c.id, avg(c.rtts)])
+    .sort((a, b) => a[1] - b[1]);
 
 async function copy(text) {
   try {
@@ -127,7 +132,7 @@ function status(c) {
 }
 
 function chat(room, key, fresh) {
-  const ui = { auto: false, mode: 'para', size: 300, every: 1500 };
+  const ui = { auto: true, mode: 'para', size: 300, every: 1500 }; // автотекст включён сразу: открыл ссылку — пошёл замер
   const rows = new Map();
   const mesh = new Mesh({
     room,
@@ -272,7 +277,7 @@ function chat(room, key, fresh) {
       .sort((a, b) => RANK[status(a).cls] - RANK[status(b).cls] || (median(a.rtts) ?? 1e9) - (median(b.rtts) ?? 1e9))
       .map((c) => {
         const s = status(c);
-        const val = !c.enabled ? 'выкл' : !c.ready() ? '—' : c.dead ? 'искл.' : c.last != null ? ms(c.last) : '···';
+        const val = !c.enabled ? 'выкл' : !c.ready() ? (c.state === 'connecting' ? 'подключ.' : 'нет связи') : c.dead ? 'искл.' : c.last != null ? ms(c.last) : '···';
         return `<button class="chip ${s.cls}" data-ch="${c.id}"><span class="dot ${s.cls}"></span><span class="cn">${esc(c.short || c.name)}</span><span class="cv">${val}</span></button>`;
       })
       .join('');
@@ -280,15 +285,12 @@ function chat(room, key, fresh) {
     const last = h[h.length - 1];
     const b5 = h.map((m) => m.best5 ?? m.t3).filter((v) => v != null);
     const wf = wins([...mesh.out.values()].map((m) => m.used).filter(Boolean), mesh.channels);
-    const topLine = wf.total
-      ? `<div class="top3"><span class="th">Побеждают у друга · ${wf.total} сообщ.</span>${wf.top
-          .slice(0, 3)
-          .map(([id, n], i) => {
-            const p = Math.round((n / wf.total) * 100);
-            return `<span class="w"><span class="wh"><span class="rank r${i + 1}">${i + 1}</span><span class="wn">${esc(nm(id))}</span></span><span class="bar"><span style="width:${p}%"></span></span><span class="wp">${p}% · ${n} из ${wf.total}</span><span class="wp">пинг ${ms(avg(mesh.byId[id]?.rtts || []))} мс</span></span>`;
-          })
-          .join('')}</div>`
-      : '';
+    // два топа по активным каналам: по качеству (процент побед) и по скорости (средний пинг)
+    const cell = (i, id, bar, l1, l2) => `<span class="w"><span class="wh"><span class="rank r${i + 1}">${i + 1}</span><span class="wn">${esc(nm(id))}</span></span><span class="bar"><span style="width:${bar}%"></span></span><span class="wp">${l1}</span>${l2 ? `<span class="wp">${l2}</span>` : ''}</span>`;
+    const fast = speedTop(mesh.channels);
+    const topLine =
+      (wf.total ? `<div class="top3"><span class="th">Топ по качеству · побед у друга из ${wf.total}</span>${wf.top.slice(0, 3).map(([id, n], i) => cell(i, id, Math.round((n / wf.total) * 100), `${Math.round((n / wf.total) * 100)}% · ${n} из ${wf.total}`)).join('')}</div>` : '') +
+      (fast.length ? `<div class="top3"><span class="th">Топ по скорости · средний пинг</span>${fast.slice(0, 3).map(([id, a], i) => cell(i, id, Math.round((fast[0][1] / a) * 100), `${ms(a)} мс`)).join('')}</div>` : '');
     $('#summary').innerHTML = (last
       ? `<div><small>3 из 5 лучших</small><b>${ms(last.best5 ?? last.t3)}<i> мс</i></b></div><div><small>Скорость 3/5</small><b>${kb([...h].reverse().find((m) => m.kbps != null)?.kbps)}<i> КБ/с</i></b></div><div><small>Трафик ↑ ↓</small><b class="sm">${kb(mesh.rate(mesh.tx))} · ${kb(mesh.rate(mesh.rx))}<i> КБ/с</i></b></div><div class="sp">${spark(b5.slice(-30))}</div>`
       : `<div class="hint">Замер начнётся с первого сообщения. «Авто» включает постоянный замер.</div>`) + topLine;
@@ -488,7 +490,7 @@ function chat(room, key, fresh) {
   }
   function sheetResults() {
     $('#sheet-title').textContent = 'Итоги';
-    $('#sheet-body').innerHTML = `<div class="stats" id="r-stats"></div><h3>Победители у друга</h3><div class="group" id="r-wf"></div><p class="note">Только активные каналы. Сначала по тому, как часто канал попадал в тройку, из которой друг собрал ваше сообщение, при равенстве по среднему пингу.</p><h3>Победители у вас</h3><div class="group" id="r-wm"></div><p class="note">То же для сообщений друга, собранных у вас.</p><h3>Каналы: сначала рабочие, по скорости</h3><div class="group" id="r-list"></div><div class="group"><button class="cell action" id="cpr">Скопировать итоги</button></div>`;
+    $('#sheet-body').innerHTML = `<div class="stats" id="r-stats"></div><h3>Топ по качеству · у друга</h3><div class="group" id="r-wf"></div><p class="note">Только активные каналы. Как часто канал попадал в тройку, из которой друг собрал ваше сообщение. При равенстве выше тот, у кого меньше пинг.</p><h3>Топ по качеству · у вас</h3><div class="group" id="r-wm"></div><p class="note">То же для сообщений друга, собранных у вас.</p><h3>Топ по скорости</h3><div class="group" id="r-sp"></div><p class="note">Только активные каналы, по среднему пингу (время туда и обратно).</p><h3>Каналы: сначала рабочие, по скорости</h3><div class="group" id="r-list"></div><div class="group"><button class="cell action" id="cpr">Скопировать итоги</button></div>`;
     $('#cpr').onclick = () => copy(resultsText());
     $('#sheet-body').onclick = (e) => {
       const r = e.target.closest('[data-open]');
@@ -508,6 +510,10 @@ function chat(room, key, fresh) {
         : '<div class="cell"><small class="muted">Пока нет собранных сообщений</small></div>';
     $('#r-wf').innerHTML = winList(wins([...mesh.out.values()].map((m) => m.used).filter(Boolean), mesh.channels));
     $('#r-wm').innerHTML = winList(wins([...mesh.inbox.values()].map((b) => b.used).filter(Boolean), mesh.channels));
+    const spd = speedTop(mesh.channels);
+    $('#r-sp').innerHTML = spd.length
+      ? spd.map(([id, a], i) => `<div class="cell row" data-open="${id}"><span class="rank r${i + 1}">${i + 1}</span><div class="rt"><div>${esc(nm(id))}</div><small>медиана ${ms(median(mesh.byId[id].rtts))} мс · ${kb(kbps(mesh.byId[id].bw))} КБ/с</small></div><span class="val">${ms(a)} мс</span></div>`).join('')
+      : '<div class="cell"><small class="muted">Пока нет замеров</small></div>';
     const RANK = { peer: 0, up: 1, wait: 2, dead: 3, down: 4, off: 5 };
     const sorted = [...mesh.channels].sort((a, b) => RANK[status(a).cls] - RANK[status(b).cls] || (median(a.rtts) ?? 1e9) - (median(b.rtts) ?? 1e9));
     $('#r-list').innerHTML = sorted

@@ -79,7 +79,7 @@ export class Mesh {
       }
     }
     this.health(t);
-    if (this.rtc && this.peer && this.me < this.peer && !this.rtc.ready() && this.peerOnline() && t - this.lastRtcTry > 15000) {
+    if (this.rtc && this.peer && this.me < this.peer && !this.rtc.ready() && this.peerOnline() && t - this.lastRtcTry > 5000) {
       this.lastRtcTry = t;
       this.rtc.connect(this.peer);
     }

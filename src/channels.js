@@ -124,7 +124,7 @@ export class WebRTCChannel extends Channel {
   gathered(pc) {
     return new Promise((res) => {
       if (pc.iceGatheringState === 'complete') return res();
-      const t = setTimeout(res, 2500);
+      const t = setTimeout(res, 1500);
       pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && (clearTimeout(t), res());
     });
   }
@@ -162,6 +162,7 @@ export class NostrChannel extends Channel {
     const sub = 's' + randHex(4);
     ws.onopen = () => {
       ws.send(JSON.stringify(['REQ', sub, { kinds: [NOSTR_KIND], '#t': [this.ctx.topic], since: Math.floor(Date.now() / 1000) - 5 }]));
+      this.fails = 0;
       this.set('up');
     };
     ws.onmessage = (e) => {
@@ -178,8 +179,10 @@ export class NostrChannel extends Channel {
     ws.onerror = () => this.set('down', 'ошибка соединения');
     ws.onclose = () => {
       if (this.ws !== ws) return;
-      this.set('down', this.err || 'соединение закрыто');
-      this.retry = setTimeout(() => this.start(this.ctx), 4000);
+      this.fails = (this.fails || 0) + 1;
+      const wait = Math.min(30000, 2000 * 2 ** Math.min(this.fails, 4));
+      this.set('down', `${this.err || 'соединение закрыто'} · повтор через ${Math.round(wait / 1000)} с`);
+      this.retry = setTimeout(() => this.start(this.ctx), wait);
     };
   }
   send(content) {
@@ -212,7 +215,7 @@ export class MqttChannel extends Channel {
     c.on('message', (_t, buf) => this.recv(new TextDecoder().decode(buf)));
     c.on('error', (e) => this.set('down', e.message));
     c.on('offline', () => this.set('down', 'нет связи с брокером'));
-    c.on('reconnect', () => this.set('connecting'));
+    c.on('reconnect', () => this.set('connecting', 'переподключаюсь'));
   }
   send(s) {
     if (this.c?.connected) this.c.publish(this.t, s, { qos: 0 });
@@ -437,8 +440,14 @@ export const CATALOG = [
   nostr('n-wellorder', 'nostr-pub.wellorder.net', 'Wellorder'),
   nostr('n-snort', 'relay.snort.social', 'Snort'),
   nostr('n-nostrnet', 'relay.nostr.net', 'nostr.net'),
+  nostr('n-sathoarder', 'nostr.sathoarder.com', 'sathoarder'),
+  nostr('n-circum', 'nostrelay.circum.space', 'circum'),
+  nostr('n-girino', 'nostr.girino.org', 'girino'),
+  nostr('n-illuminodes', 'relay.illuminodes.com', 'illuminodes'),
+  nostr('n-datahaus', 'nostr.data.haus', 'data.haus'),
   mq('m-hivemq', 'HiveMQ', 'wss://broker.hivemq.com:8884/mqtt'),
   mq('m-emqx', 'EMQX', 'wss://broker.emqx.io:8084/mqtt'),
+  mq('m-emqxcn', 'EMQX-CN', 'wss://broker-cn.emqx.io:8084/mqtt'),
   mq('m-mosq', 'Mosquitto', 'wss://test.mosquitto.org:8081/mqtt'),
   mq('m-eclipse', 'Eclipse', 'wss://mqtt.eclipseprojects.io:443/mqtt'),
   { id: 'yandex', name: 'Yandex Object Storage', group: 'ru', soon: true, host: 'storage.yandexcloud.net', about: 'Ящик-файл на российском IP. Нужна проверка CORS.' },
