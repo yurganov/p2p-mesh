@@ -1,0 +1,33 @@
+{
+ "version": 1794095241,
+ "files": {
+  "app.js": "DYM-QKXnxI7_C3rLRywp9MbpB1ZqguR00kIVARp8puY",
+  "apple-touch-icon.png": "VNgCRRdGWxq0xgQSMnVzmzLbJ8t3P-Q4_y-p6gPkRxI",
+  "core.wasm": "TfdQJCyuzZbtsvMAvbzrP__7AbRuwlPE8E5m5Yx2guI",
+  "favicon-16x16.png": "AlWkRhdX8MLuWKJRO_h-Ym0f_5nrKhlevY2AsjXdq0I",
+  "favicon-32x32.png": "h4hlO1C7SVb1c5L2gk6WAy7Dh1ZA9zsNvYtJ3zkczzU",
+  "favicon.svg": "C-fgjOx2BsUUGtple4yKG4HAurZFntBftHiwLwcDBq8",
+  "icon-192.png": "PCvTa8qeXHTdL3XLMtsvO985TUxg4qU9CMEq44ST8PU",
+  "icon-512.png": "VWs5gQp3atsEv32wf8hPqB3rH8or28Bavwzf4PyvRaw",
+  "icon-maskable-512.png": "ItPNDxJ0dkbhU4Nsbh8DrHaV9x3XhrveOPERWQAIKAQ",
+  "index.html": "zWC04-QIDt3TYj2NDqVsWvMLHcDkRJ9GFx5eb91mu88",
+  "site.webmanifest": "lKzgfsplwFFME8C7QJIFPkTef-5WisNTpXmU6TY-cX0",
+  "stand.html": "TBUOaTSbfcnvfS8H7ndupGCAL4uUVqiQ4Jv_I7S7YxI",
+  "stand.js": "1pKCbeOcpYla2ica4UfhfBHya8G-NL0GxWRnF6H-kew",
+  "style.css": "wFgLViLlVdZNXbKxE7FDweYWoBzsBhl3526mfd-fENU",
+  "sw.js": "o-uyYphHi4x1VLdzCTbEY1wljNisFahltOcptrbflKQ",
+  "wasm_exec.js": "DJSfSZb5qJaY5LXFht4yJJw7abe6rbZNIgBzzASsuhQ",
+  "worker.js": "sJCjAJubRS8eeH_eB6HT796YzO1ZqSX-uSuOCCUrOdI"
+ },
+ "not_before_round": 0,
+ "sigs": [
+  {
+   "key": "_jVZ8vIAG272S_NTc1TdpsC7txYePle2gTJSCvUdC-E",
+   "sig": "JOAgAfO9447N1UEWTHMyDIo9WMZK6pgaJ0tmvFR-zWUYzp5-i7QU3h-TtEUFQixArrRDYuxqBAHnaZI_UeA4Ag"
+  },
+  {
+   "key": "lGRu9jAeEknUts2R2koOfhqUhMt63oi_qvvDXBFQqd4",
+   "sig": "CB92sHyFDv-3Vr-8MCZinLzwFN64Fvvckg39vvqlfwaCQd_xDWfEw2V5ZfTmvsGcdNfxUKbw3VP0GjSl9aIuBQ"
+  }
+ ]
+}

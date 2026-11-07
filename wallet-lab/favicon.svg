@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<style>.bg{fill:#5856d6}.fg{fill:none;stroke:#fff;stroke-width:34;stroke-linecap:round;stroke-linejoin:round}.dot{fill:#fff}@media (prefers-color-scheme:dark){.bg{fill:#5e5ce6}}</style>
+<rect class="bg" width="512" height="512" rx="112"/>
+<path class="fg" d="M256 104l124 46v88c0 82-52 138-124 166-72-28-124-84-124-166v-88z"/>
+<circle class="dot" cx="206" cy="250" r="22"/><circle class="dot" cx="306" cy="250" r="22"/><circle class="dot" cx="256" cy="320" r="22"/>
+</svg>

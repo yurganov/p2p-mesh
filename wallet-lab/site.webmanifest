@@ -1,0 +1,17 @@
+{
+  "id": "/p2p-mesh/wallet-lab/",
+  "name": "Wallet Lab",
+  "short_name": "Wallet Lab",
+  "description": "Отладка семейного кошелька: passkey, OPRF, TSS 3 из 3, TRON Nile",
+  "lang": "ru",
+  "start_url": "/p2p-mesh/wallet-lab/",
+  "scope": "/p2p-mesh/wallet-lab/",
+  "display": "standalone",
+  "background_color": "#f2f2f7",
+  "theme_color": "#f2f2f7",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
